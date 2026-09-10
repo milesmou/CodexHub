@@ -1,7 +1,7 @@
 [package]
 name = "codex-helper"
 version = "0.1.0"
-description = "Codex 多账号管家 - 额度看板与快速切换"
+description = "CodexHelper - 额度看板与快速切换"
 authors = ["CodexHelper"]
 edition = "2021"
 rust-version = "1.77"

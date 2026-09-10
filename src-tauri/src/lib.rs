@@ -174,5 +174,5 @@ pub fn run() {
             }
         })
         .run(tauri::generate_context!())
-        .expect("Codex 多账号管家启动失败");
+        .expect("CodexHelper 启动失败");
 }

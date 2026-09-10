@@ -42,7 +42,7 @@ fn account_line(account: &Account, quota: Option<&Quota>, is_current: bool) -> S
 
 /// 悬停提示：显示当前账号和它的额度（同样是剩余）。
 fn tooltip(vault: &Vault) -> String {
-    let base = "Codex 多账号管家";
+    let base = "CodexHelper";
     let Some(cur) = vault
         .current_id
         .as_deref()

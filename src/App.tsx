@@ -341,7 +341,7 @@ export default function App() {
     <div className="app">
       <div className="topbar">
         <div className="brand">
-          <h1>Codex 多账号管家</h1>
+          <h1>CodexHelper</h1>
           <span className="count">
             {accounts.length} 个账号 · {officialCount} 个可查额度
           </span>

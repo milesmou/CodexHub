@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 rem ============================================================
-rem  Codex 多账号管家 —— debug 模式运行（开发 / 验收用）
+rem  CodexHelper —— debug 模式运行（开发 / 验收用）
 rem
 rem  会做四件事：
 rem    1. 确认能找到 npm
@@ -35,7 +35,7 @@ if errorlevel 1 goto failed
 call :killstale
 
 echo.
-echo [run] 以 debug 模式启动 Codex 多账号管家
+echo [run] 以 debug 模式启动 CodexHelper
 echo       首次 Rust 编译需要几分钟，请耐心等待
 echo       关掉本窗口或按 Ctrl+C 结束
 echo.

@@ -16,7 +16,7 @@ from PIL import ImageGrab
 user32 = ctypes.windll.user32
 
 SW_RESTORE = 9
-TARGET_TITLE = "Codex 多账号管家"
+TARGET_TITLE = "CodexHelper"
 
 VK_MENU = 0x12  # Alt
 KEYEVENTF_KEYUP = 0x0002

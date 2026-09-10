@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 rem ============================================================
-rem  Codex 多账号管家 —— 构建 release EXE
+rem  CodexHelper —— 构建 release EXE
 rem
 rem  产物：
 rem    release\codex-helper.exe

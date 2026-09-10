@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Codex 多账号管家默认权限",
+  "description": "CodexHelper 默认权限",
   "windows": ["main"],
   "permissions": [
     "core:default",
