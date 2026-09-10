@@ -1,0 +1,51 @@
+[package]
+name = "codex-helper"
+version = "0.1.0"
+description = "Codex 多账号管家 - 额度看板与快速切换"
+authors = ["CodexHelper"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "codex_helper_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-dialog = "2"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "io-util"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+uuid = { version = "1", features = ["v4"] }
+toml_edit = "0.22"
+
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"
+keyring = { version = "3", features = ["windows-native"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+sysinfo = "0.36.1"
+
+# debug 构建：不生成 DWARF 调试信息。
+# 链接时间能砍掉一大半，代价是没法单步调试——本工具排错靠日志就够，不亏。
+# 注意：改了 profile 后第一次 `cargo build` 会全量重编一次，属于正常现象。
+[profile.dev]
+debug = false
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
