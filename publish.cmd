@@ -1,20 +1,15 @@
 @echo off
 chcp 65001 >nul
 rem ============================================================
-rem  Codex 多账号管家 —— 构建 release 版本 + 安装包
+rem  Codex 多账号管家 —— 构建 release EXE
 rem
 rem  产物：
-rem    src-tauri\target\release\codex-helper.exe
-rem    src-tauri\target\release\bundle\nsis\CodexHelper_x.x.x_x64-setup.exe
+rem    release\codex-helper.exe
 rem
 rem  release 开了 LTO，构建大约 10-15 分钟。
-rem  只想快速拿个 exe、不要安装包：publish.cmd --no-bundle
 rem ============================================================
 setlocal
 cd /d "%~dp0"
-
-set "BUNDLE_ARGS="
-if /i "%~1"=="--no-bundle" set "BUNDLE_ARGS=--no-bundle"
 
 where npm >nul 2>nul
 if not errorlevel 1 goto havenpm
@@ -36,19 +31,23 @@ if errorlevel 1 goto failed
 echo.
 echo [publish] 开始构建 release 版本（LTO 全量优化，约 10-15 分钟）...
 echo.
-call npx tauri build %BUNDLE_ARGS%
+call npx tauri build --no-bundle
 if errorlevel 1 goto failed
+
+rem 构建成功后再刷新发布目录，避免构建失败时删除上一次的可用产物
+if exist "release" rmdir /s /q "release"
+if errorlevel 1 goto copyfailed
+mkdir "release"
+if errorlevel 1 goto copyfailed
+
+copy /y "src-tauri\target\release\codex-helper.exe" "release\codex-helper.exe" >nul
+if errorlevel 1 goto copyfailed
 
 echo.
 echo [publish] 构建完成。
 echo.
-echo   可执行文件： src-tauri\target\release\codex-helper.exe
-if "%BUNDLE_ARGS%"=="" (
-  echo   安装包目录： src-tauri\target\release\bundle\nsis\
-  if exist "src-tauri\target\release\bundle\nsis" (
-    for %%F in ("src-tauri\target\release\bundle\nsis\*.exe") do echo     %%~nxF
-  )
-)
+echo   发布目录： release\
+echo     codex-helper.exe
 echo.
 pause
 exit /b 0
@@ -62,5 +61,11 @@ exit /b 1
 :failed
 echo.
 echo [publish] 构建失败，请看上面的错误信息。
+pause
+exit /b 1
+
+:copyfailed
+echo.
+echo [publish] 构建成功，但复制 EXE 到 release 目录失败。
 pause
 exit /b 1
