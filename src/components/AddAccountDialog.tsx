@@ -16,7 +16,9 @@ interface Props {
 }
 
 /** config.toml 里指向第三方中转的最简模板，点「插入模板」时塞进编辑框。 */
-const THIRD_PARTY_CONFIG_TEMPLATE = `[model_providers.custom]
+const THIRD_PARTY_CONFIG_TEMPLATE = `model_provider = "custom"
+
+[model_providers.custom]
 name = "custom"
 base_url = "https://your-relay.example.com/v1"
 wire_api = "responses"
@@ -94,6 +96,11 @@ export function AddAccountDialog({
     };
   }, [authText]);
 
+  // 官方账号只需要 auth.json；即使编辑的是旧数据，也不保留历史 config 片段。
+  useEffect(() => {
+    if (preview?.kind === "official") setConfigText("");
+  }, [preview?.kind]);
+
   // ------------------------------------------------------------ 操作
 
   async function pickFile() {
@@ -148,7 +155,7 @@ export function AddAccountDialog({
       if (mode === "edit" && account) {
         const updated = await api.updateAccountCredentials(account.id, {
           auth: trimmedAuth,
-          config: configText,
+          config: preview?.kind === "third_party" ? configText : "",
           name: name.trim() || null,
         });
         onSaved(updated.name, updated.id);
@@ -156,7 +163,8 @@ export function AddAccountDialog({
         const created = await api.createAccount({
           name: name.trim(),
           auth: trimmedAuth,
-          config: configText.trim() ? configText : null,
+          config:
+            preview?.kind === "third_party" && configText.trim() ? configText : null,
           source: pickedPath ? `file:${pickedPath}` : "manual",
         });
         onSaved(created.name, created.id);
@@ -174,7 +182,7 @@ export function AddAccountDialog({
     return preview.kind === "official" ? "官方账号" : "第三方账号";
   }, [preview]);
 
-  const canSave = authText.trim().length > 0 && (!preview || preview.ok) && !saving;
+  const canSave = authText.trim().length > 0 && preview?.ok === true && !saving;
 
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -257,33 +265,35 @@ export function AddAccountDialog({
                 )}
               </div>
 
-              <div className="field">
-                <div className="field-row">
-                  <label>config.toml 片段（可选）</label>
-                  <div className="mini-actions">
-                    <button
-                      className="ghost"
-                      onClick={() => setConfigText(THIRD_PARTY_CONFIG_TEMPLATE)}
-                    >
-                      插入第三方模板
-                    </button>
-                    <button className="ghost" onClick={fillConfigFromCurrent}>
-                      以当前配置为模板
-                    </button>
+              {preview?.kind === "third_party" && (
+                <div className="field">
+                  <div className="field-row">
+                    <label>第三方服务配置（config.toml）</label>
+                    <div className="mini-actions">
+                      <button
+                        className="ghost"
+                        onClick={() => setConfigText(THIRD_PARTY_CONFIG_TEMPLATE)}
+                      >
+                        插入第三方模板
+                      </button>
+                      <button className="ghost" onClick={fillConfigFromCurrent}>
+                        以当前配置为模板
+                      </button>
+                    </div>
                   </div>
+                  <textarea
+                    className="code-area"
+                    spellCheck={false}
+                    value={configText}
+                    placeholder="切换到这个账号时会合并进 ~/.codex/config.toml（只覆盖第三方服务设置）"
+                    onChange={(e) => setConfigText(e.target.value)}
+                  />
+                  <p className="hint">
+                    第三方中转账号需要在这里配上 <code>[model_providers.*]</code>，
+                    指向中转地址。项目配置和会话记录不会随账号切换，所有账号共用。
+                  </p>
                 </div>
-                <textarea
-                  className="code-area"
-                  spellCheck={false}
-                  value={configText}
-                  placeholder="切换到这个账号时会合并进 ~/.codex/config.toml（只覆盖这里写到的键）"
-                  onChange={(e) => setConfigText(e.target.value)}
-                />
-                <p className="hint">
-                  第三方中转账号需要在这里配上 <code>[model_providers.*]</code>，
-                  指向中转地址。留空则切换时不动 config.toml。
-                </p>
-              </div>
+              )}
             </>
           )}
         </div>

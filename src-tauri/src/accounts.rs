@@ -139,6 +139,36 @@ pub fn validate_config_snippet(snippet: &str) -> Result<()> {
     Ok(())
 }
 
+/// 规范化账号自带的 config.toml 片段。
+///
+/// 官方账号只使用 auth.json，永远不保存配置片段。第三方账号可以保存服务商配置，
+/// 但 `projects` 和 `history` 属于所有账号共用的 Codex 工作环境，不能跟着账号切换。
+pub fn normalize_config_snippet(
+    kind: AccountKind,
+    snippet: Option<&str>,
+) -> Result<Option<String>> {
+    if kind == AccountKind::Official {
+        return Ok(None);
+    }
+
+    let Some(snippet) = snippet.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let mut doc = snippet
+        .parse::<toml_edit::DocumentMut>()
+        .context("配置片段不是合法 TOML")?;
+
+    // 项目信任设置和会话持久化策略属于共享环境，不进入任何账号的私有配置。
+    doc.as_table_mut().remove("projects");
+    doc.as_table_mut().remove("history");
+
+    if doc.as_table().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(doc.to_string()))
+    }
+}
+
 /// 由表单构造一条账号记录。
 pub fn build_account(
     payload: &NewAccountPayload,
@@ -154,16 +184,8 @@ pub fn build_account(
         return Err(anyhow!(err));
     }
 
-    let config = payload
-        .config
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
-    if let Some(snippet) = &config {
-        validate_config_snippet(snippet)?;
-    }
+    let kind = classify(&auth);
+    let config = normalize_config_snippet(kind, payload.config.as_deref())?;
 
     let name = payload.name.trim();
     let name = if name.is_empty() {
@@ -171,8 +193,6 @@ pub fn build_account(
     } else {
         name.to_string()
     };
-
-    let kind = classify(&auth);
 
     Ok(Account {
         id,
@@ -189,4 +209,43 @@ pub fn build_account(
         hidden: false,
         created_at: chrono::Utc::now().to_rfc3339(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn official_account_never_keeps_config() {
+        let config = normalize_config_snippet(AccountKind::Official, Some("not valid toml ["))
+            .expect("official config should be ignored");
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn third_party_config_excludes_shared_projects_and_history() {
+        let input = r#"
+model_provider = "custom"
+
+[model_providers.custom]
+name = "custom"
+base_url = "https://relay.example.com/v1"
+
+[projects."D:/work"]
+trust_level = "trusted"
+
+[history]
+persistence = "save-all"
+"#;
+
+        let normalized = normalize_config_snippet(AccountKind::ThirdParty, Some(input))
+            .expect("valid config")
+            .expect("provider config remains");
+        let doc = normalized.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+
+        assert_eq!(doc["model_provider"].as_str(), Some("custom"));
+        assert!(doc.get("model_providers").is_some());
+        assert!(doc.get("projects").is_none());
+        assert!(doc.get("history").is_none());
+    }
 }

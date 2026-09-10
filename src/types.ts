@@ -123,7 +123,7 @@ export interface NewAccountPayload {
   name: string;
   /** auth.json 原文 */
   auth: string;
-  /** config.toml 片段，可空 */
+  /** 第三方服务 config.toml 片段，可空；官方账号忽略 */
   config?: string | null;
   /** 来源标记，仅作记录 */
   source?: string | null;
@@ -133,7 +133,7 @@ export interface NewAccountPayload {
 export interface EditAccountPayload {
   /** 传了就替换 auth（原文 JSON） */
   auth?: string | null;
-  /** 传了就替换 config 片段；空串表示清空 */
+  /** 传了就替换第三方服务 config 片段；空串表示清空，官方账号忽略 */
   config?: string | null;
   name?: string | null;
 }
@@ -202,4 +202,3 @@ export interface TokenStats {
   /** 口径说明 */
   note: string;
 }
-

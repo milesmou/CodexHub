@@ -256,7 +256,7 @@ fn maybe_auto_warmup(app: &AppHandle) {
 /// 1. `restart_codex` 为真时，**先关掉 Codex 并等它退干净**。
 ///    Codex 在退出阶段有机会把内存里的旧 auth **回写**磁盘，
 ///    所以「先写文件再关进程」等于白写。
-/// 2. 备份 → 写 auth.json → 按需合并 config.toml。
+/// 2. 备份 → 写 auth.json → 第三方账号按需合并 config.toml。
 ///    任何一步失败立刻中断，不会留下「auth 换了但 config 没换」的半成品。
 /// 3. **最后把 Codex 重新拉起来**，让它读进新账号。
 pub fn switch_account_inner(
@@ -264,7 +264,7 @@ pub fn switch_account_inner(
     id: &str,
     restart_codex: bool,
 ) -> Result<SwitchOutcome, String> {
-    let (auth, cc_id, name, sync_cc, snippet) = snapshot(app, |vault| {
+    let (auth, cc_id, name, sync_cc, kind, snippet) = snapshot(app, |vault| {
         vault
             .find(id)
             .map(|acc| {
@@ -273,6 +273,7 @@ pub fn switch_account_inner(
                     acc.cc_id.clone(),
                     acc.name.clone(),
                     vault.settings.sync_ccswitch,
+                    acc.kind,
                     acc.config.clone(),
                 )
             })
@@ -305,10 +306,12 @@ pub fn switch_account_inner(
 
     codex::write_auth(&auth).map_err(|e| format!("写入 auth.json 失败：{e}"))?;
 
-    // 该账号带了 config.toml 片段就合并进去（只覆盖片段里出现的键）
+    // 官方账号永不应用 config；第三方片段也会剔除共享的 projects/history。
     let mut config_applied = false;
     let mut config_backup_path = None;
-    if let Some(snippet) = snippet.filter(|s| !s.trim().is_empty()) {
+    let snippet = accounts::normalize_config_snippet(kind, snippet.as_deref())
+        .map_err(|e| format!("账号 config.toml 无效：{e}"))?;
+    if let Some(snippet) = snippet {
         config_backup_path = codex::backup_config().map(|p| p.display().to_string()).ok();
         let current = codex::read_config();
         let merged = codex::merge_config(&current, &snippet)
@@ -629,10 +632,13 @@ pub fn read_current_auth_text() -> Result<String, String> {
     serde_json::to_string_pretty(&auth).map_err(|e| format!("{e}"))
 }
 
-/// 读取当前 `~/.codex/config.toml` 的原文，供「以当前配置为模板」使用。
+/// 读取当前 `~/.codex/config.toml` 作为第三方模板，剔除共享的项目与历史设置。
 #[tauri::command]
 pub fn read_current_config_text() -> String {
-    codex::read_config()
+    accounts::normalize_config_snippet(AccountKind::ThirdParty, Some(&codex::read_config()))
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// 编辑账号弹窗的回填数据。
@@ -641,7 +647,7 @@ pub struct AccountCredentials {
     pub name: String,
     /// auth.json 原文（已格式化），供编辑框回填
     pub auth: String,
-    /// config.toml 片段，可能为空
+    /// 第三方服务 config.toml 片段，官方账号始终为空
     pub config: Option<String>,
 }
 
@@ -696,7 +702,7 @@ pub struct EditAccountPayload {
     /// 传了就替换 auth（原文 JSON）
     #[serde(default)]
     pub auth: Option<String>,
-    /// 传了就替换 config 片段；空串表示清空
+    /// 传了就替换第三方服务 config 片段；空串表示清空，官方账号忽略
     #[serde(default)]
     pub config: Option<String>,
     #[serde(default)]
@@ -723,15 +729,23 @@ pub fn update_account_credentials(
         None => None,
     };
 
-    let incoming_config = payload
-        .config
-        .as_deref()
-        .map(|c| c.trim().to_string());
-    if let Some(c) = &incoming_config {
-        if !c.is_empty() {
-            accounts::validate_config_snippet(c).map_err(|e| format!("{e}"))?;
-        }
-    }
+    let current_kind = {
+        let vault = state.vault.lock().unwrap();
+        vault
+            .find(&id)
+            .map(|acc| acc.kind)
+            .ok_or_else(|| "账号不存在".to_string())?
+    };
+    let target_kind = parsed_auth
+        .as_ref()
+        .map(accounts::classify)
+        .unwrap_or(current_kind);
+    let config_was_supplied = payload.config.is_some();
+    let incoming_config = accounts::normalize_config_snippet(
+        target_kind,
+        payload.config.as_deref(),
+    )
+    .map_err(|e| format!("{e}"))?;
 
     // 2) 再落库
     {
@@ -749,8 +763,10 @@ pub fn update_account_credentials(
             acc.plan_type = None;
         }
 
-        if let Some(c) = incoming_config {
-            acc.config = if c.is_empty() { None } else { Some(c) };
+        if acc.kind == AccountKind::Official {
+            acc.config = None;
+        } else if config_was_supplied {
+            acc.config = incoming_config;
         }
 
         if let Some(n) = payload.name {

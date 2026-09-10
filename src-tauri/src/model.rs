@@ -28,7 +28,7 @@ pub struct Account {
     pub kind: AccountKind,
     /// 完整的 auth.json 内容，切换时原样写回 ~/.codex/auth.json
     pub auth: serde_json::Value,
-    /// 可选的 config.toml 片段（第三方中转账号会带）
+    /// 可选的第三方服务 config.toml 片段；projects/history 始终使用共享配置
     #[serde(default)]
     pub config: Option<String>,
     /// 来源标记：cc-switch / current / manual

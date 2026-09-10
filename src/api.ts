@@ -57,7 +57,7 @@ export const api = {
   /** 读取当前 ~/.codex/auth.json 原文 */
   readCurrentAuthText: () => invoke<string>("read_current_auth_text"),
 
-  /** 读取当前 ~/.codex/config.toml 原文 */
+  /** 读取当前 ~/.codex/config.toml，并剔除共享的 projects/history 配置 */
   readCurrentConfigText: () => invoke<string>("read_current_config_text"),
 
   /** 读取指定账号存着的授权内容，用于编辑回填 */

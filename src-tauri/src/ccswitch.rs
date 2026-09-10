@@ -13,7 +13,7 @@
 //!
 //! 其中 `auth` 可能是「JSON 字符串」也可能已经是「对象」，这里两种都兼容。
 
-use crate::codex;
+use crate::{accounts, codex};
 use crate::model::{Account, AccountKind};
 use crate::store;
 use anyhow::{anyhow, Context, Result};
@@ -143,7 +143,11 @@ pub fn to_account(p: &CcProvider) -> Account {
         account_id,
         kind,
         auth: p.auth.clone(),
-        config: p.config.clone(),
+        config: accounts::normalize_config_snippet(kind, p.config.as_deref())
+            .unwrap_or_else(|e| {
+                eprintln!("[codex-helper] 忽略 {} 的无效 config.toml：{e}", p.id);
+                None
+            }),
         source: Some("cc-switch".to_string()),
         cc_id: Some(p.id.clone()),
         sort_index: p.sort_index,
