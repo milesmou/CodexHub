@@ -4,7 +4,7 @@ rem ============================================================
 rem  CodexHelper —— 构建 release EXE
 rem
 rem  产物：
-rem    release\codex-helper.exe
+rem    release\CodexHelper.exe
 rem
 rem  release 开了 LTO，构建大约 10-15 分钟。
 rem ============================================================
@@ -40,14 +40,14 @@ if errorlevel 1 goto copyfailed
 mkdir "release"
 if errorlevel 1 goto copyfailed
 
-copy /y "src-tauri\target\release\codex-helper.exe" "release\codex-helper.exe" >nul
+copy /y "src-tauri\target\release\codex-helper.exe" "release\CodexHelper.exe" >nul
 if errorlevel 1 goto copyfailed
 
 echo.
 echo [publish] 构建完成。
 echo.
 echo   发布目录： release\
-echo     codex-helper.exe
+echo     CodexHelper.exe
 echo.
 pause
 exit /b 0

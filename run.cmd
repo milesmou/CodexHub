@@ -46,12 +46,13 @@ goto end
 
 rem ------------------------------------------------------------
 rem  清理上一次没退干净的进程：
-rem    - codex-helper.exe：上一次的应用实例
+rem    - codex-helper.exe / CodexHelper.exe：上一次的应用实例
 rem    - 占用 1420 端口的进程：上一次 Vite dev server
 rem  只针对这两个，不动别的 node 进程。
 rem ------------------------------------------------------------
 :killstale
 taskkill /F /IM codex-helper.exe >nul 2>nul
+taskkill /F /IM CodexHelper.exe >nul 2>nul
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":1420 " ^| findstr "LISTENING"') do (
     taskkill /F /PID %%p >nul 2>nul
 )

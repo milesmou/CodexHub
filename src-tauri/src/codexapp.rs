@@ -29,7 +29,8 @@
 //!    —— 你自己在终端里敲的那个 `codex` 也在这条规则里，一并关掉，
 //!    免得还有别的会话握着旧账号。
 //!
-//! 本工具自己叫 `codex-helper.exe`，不在名单里，不会自杀。
+//! 本工具发布后叫 `CodexHelper.exe`（开发构建为 `codex-helper.exe`），
+//! 不在名单里，并且始终按 PID 排除自身，不会自杀。
 
 use serde::Serialize;
 use std::fs;
