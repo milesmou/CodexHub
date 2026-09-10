@@ -264,7 +264,7 @@ pub fn switch_account_inner(
     id: &str,
     restart_codex: bool,
 ) -> Result<SwitchOutcome, String> {
-    let (auth, cc_id, name, sync_cc, kind, snippet) = snapshot(app, |vault| {
+    let (auth, cc_id, name, sync_cc, kind, snippet, base_url, models) = snapshot(app, |vault| {
         vault
             .find(id)
             .map(|acc| {
@@ -275,6 +275,8 @@ pub fn switch_account_inner(
                     vault.settings.sync_ccswitch,
                     acc.kind,
                     acc.config.clone(),
+                    acc.base_url.clone(),
+                    acc.models.clone(),
                 )
             })
             .ok_or_else(|| "账号不存在".to_string())
@@ -306,18 +308,41 @@ pub fn switch_account_inner(
 
     codex::write_auth(&auth).map_err(|e| format!("写入 auth.json 失败：{e}"))?;
 
-    // 官方账号永不应用 config；第三方片段也会剔除共享的 projects/history。
+    // 先清掉上一个结构化第三方账号的托管字段，项目、会话和其他用户设置保持原样。
     let mut config_applied = false;
     let mut config_backup_path = None;
-    let snippet = accounts::normalize_config_snippet(kind, snippet.as_deref())
-        .map_err(|e| format!("账号 config.toml 无效：{e}"))?;
-    if let Some(snippet) = snippet {
+    let current_config = codex::read_config();
+    let base_config = codex::clear_managed_third_party_config(&current_config)
+        .map_err(|e| format!("清理旧第三方配置失败：{e}"))?;
+    let account_config = if kind == AccountKind::ThirdParty {
+        if let Some(base_url) = base_url.as_deref() {
+            if !models.is_empty() {
+                codex::write_model_catalog(&models)
+                    .map_err(|e| format!("写入模型列表失败：{e}"))?;
+                Some(codex::managed_third_party_config(base_url, &models))
+            } else {
+                None
+            }
+        } else {
+            // 兼容旧版和 cc-switch 导入的数据。
+            accounts::normalize_config_snippet(kind, snippet.as_deref())
+                .map_err(|e| format!("账号 config.toml 无效：{e}"))?
+        }
+    } else {
+        None
+    };
+    let next_config = match account_config {
+        Some(snippet) => {
+            config_applied = true;
+            codex::merge_config(&base_config, &snippet)
+                .map_err(|e| format!("合并 config.toml 失败，已中止切换：{e}"))?
+        }
+        None => base_config,
+    };
+    if next_config != current_config {
         config_backup_path = codex::backup_config().map(|p| p.display().to_string()).ok();
-        let current = codex::read_config();
-        let merged = codex::merge_config(&current, &snippet)
-            .map_err(|e| format!("合并 config.toml 失败，已中止切换：{e}"))?;
-        codex::write_config_text(&merged).map_err(|e| format!("写入 config.toml 失败：{e}"))?;
-        config_applied = true;
+        codex::write_config_text(&next_config)
+            .map_err(|e| format!("写入 config.toml 失败：{e}"))?;
     }
 
     // 尽量让 cc-switch 的当前 Provider 跟我们对齐；失败不影响切换本身
@@ -647,8 +672,8 @@ pub struct AccountCredentials {
     pub name: String,
     /// auth.json 原文（已格式化），供编辑框回填
     pub auth: String,
-    /// 第三方服务 config.toml 片段，官方账号始终为空
-    pub config: Option<String>,
+    pub base_url: Option<String>,
+    pub models: Vec<String>,
 }
 
 /// 读取指定账号存着的授权内容，供「编辑授权」弹窗回填。
@@ -665,7 +690,8 @@ pub fn read_account_credentials(
     Ok(AccountCredentials {
         name: acc.name.clone(),
         auth: serde_json::to_string_pretty(&acc.auth).map_err(|e| format!("{e}"))?,
-        config: acc.config.clone(),
+        base_url: acc.base_url.clone(),
+        models: acc.models.clone(),
     })
 }
 
@@ -702,9 +728,12 @@ pub struct EditAccountPayload {
     /// 传了就替换 auth（原文 JSON）
     #[serde(default)]
     pub auth: Option<String>,
-    /// 传了就替换第三方服务 config 片段；空串表示清空，官方账号忽略
+    /// 传了就替换第三方服务地址
     #[serde(default)]
-    pub config: Option<String>,
+    pub base_url: Option<String>,
+    /// 传了就替换第三方模型列表
+    #[serde(default)]
+    pub models: Option<Vec<String>>,
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -740,12 +769,23 @@ pub fn update_account_credentials(
         .as_ref()
         .map(accounts::classify)
         .unwrap_or(current_kind);
-    let config_was_supplied = payload.config.is_some();
-    let incoming_config = accounts::normalize_config_snippet(
-        target_kind,
-        payload.config.as_deref(),
-    )
-    .map_err(|e| format!("{e}"))?;
+    let base_url_was_supplied = payload.base_url.is_some();
+    let models_were_supplied = payload.models.is_some();
+    let incoming_base_url = if target_kind == AccountKind::ThirdParty && base_url_was_supplied {
+        Some(accounts::normalize_base_url(payload.base_url.as_deref()).map_err(|e| format!("{e}"))?)
+    } else {
+        None
+    };
+    let incoming_models = if target_kind == AccountKind::ThirdParty {
+        payload
+            .models
+            .as_deref()
+            .map(accounts::normalize_models)
+            .transpose()
+            .map_err(|e| format!("{e}"))?
+    } else {
+        None
+    };
 
     // 2) 再落库
     {
@@ -765,8 +805,15 @@ pub fn update_account_credentials(
 
         if acc.kind == AccountKind::Official {
             acc.config = None;
-        } else if config_was_supplied {
-            acc.config = incoming_config;
+            acc.base_url = None;
+            acc.models.clear();
+        } else {
+            if base_url_was_supplied {
+                acc.base_url = incoming_base_url;
+            }
+            if models_were_supplied {
+                acc.models = incoming_models.unwrap_or_default();
+            }
         }
 
         if let Some(n) = payload.name {

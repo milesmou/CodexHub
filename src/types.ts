@@ -121,10 +121,13 @@ export interface PickedFile {
 /** 新建账号表单。 */
 export interface NewAccountPayload {
   name: string;
+  kind: AccountKind;
   /** auth.json 原文 */
   auth: string;
-  /** 第三方服务 config.toml 片段，可空；官方账号忽略 */
-  config?: string | null;
+  /** 第三方服务地址；官方账号忽略 */
+  base_url?: string | null;
+  /** 第三方模型列表；官方账号忽略 */
+  models?: string[];
   /** 来源标记，仅作记录 */
   source?: string | null;
 }
@@ -133,8 +136,10 @@ export interface NewAccountPayload {
 export interface EditAccountPayload {
   /** 传了就替换 auth（原文 JSON） */
   auth?: string | null;
-  /** 传了就替换第三方服务 config 片段；空串表示清空，官方账号忽略 */
-  config?: string | null;
+  /** 传了就替换第三方服务地址 */
+  base_url?: string | null;
+  /** 传了就替换第三方模型列表 */
+  models?: string[];
   name?: string | null;
 }
 
@@ -142,7 +147,8 @@ export interface EditAccountPayload {
 export interface AccountCredentials {
   name: string;
   auth: string;
-  config?: string | null;
+  base_url?: string | null;
+  models: string[];
 }
 
 /** 一次「激活 5 小时窗口」的结果。 */

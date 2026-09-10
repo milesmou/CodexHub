@@ -31,6 +31,12 @@ pub struct Account {
     /// 可选的第三方服务 config.toml 片段；projects/history 始终使用共享配置
     #[serde(default)]
     pub config: Option<String>,
+    /// 第三方服务地址；官方账号为空
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// 第三方服务提供的模型列表；第一项作为默认模型
+    #[serde(default)]
+    pub models: Vec<String>,
     /// 来源标记：cc-switch / current / manual
     #[serde(default)]
     pub source: Option<String>,

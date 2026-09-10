@@ -6,6 +6,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 
+const MANAGED_PROVIDER_ID: &str = "codexhelper";
+
 /// Codex 的配置目录，优先读 CODEX_HOME 环境变量。
 pub fn codex_home() -> PathBuf {
     if let Some(dir) = std::env::var_os("CODEX_HOME") {
@@ -141,6 +143,110 @@ fn merge_table(dst: &mut toml_edit::Table, src: &toml_edit::Table) {
     }
 }
 
+/// CodexHelper 为当前第三方账号生成的模型目录。
+pub fn model_catalog_path() -> PathBuf {
+    codex_home().join("codex-helper-model-catalog.json")
+}
+
+/// 根据模型名称生成 Codex 可加载的模型目录。
+pub fn write_model_catalog(models: &[String]) -> Result<PathBuf> {
+    let path = model_catalog_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("创建 Codex 目录失败：{}", parent.display()))?;
+    }
+
+    let entries: Vec<Value> = models
+        .iter()
+        .enumerate()
+        .map(|(index, model)| {
+            serde_json::json!({
+                "additional_speed_tiers": [],
+                "availability_nux": null,
+                "base_instructions": "You are Codex, a coding agent. You and the user share the same workspace and collaborate to achieve the user's goals.",
+                "context_window": 128000,
+                "default_reasoning_level": "medium",
+                "default_reasoning_summary": "none",
+                "description": model,
+                "display_name": model,
+                "effective_context_window_percent": 95,
+                "experimental_supported_tools": [],
+                "input_modalities": ["text", "image"],
+                "max_context_window": 128000,
+                "priority": 1000 + index,
+                "service_tiers": [],
+                "shell_type": "shell_command",
+                "slug": model,
+                "support_verbosity": false,
+                "supported_in_api": true,
+                "supported_reasoning_levels": [{
+                    "description": "Balances speed and reasoning depth for everyday tasks",
+                    "effort": "medium"
+                }],
+                "supports_image_detail_original": false,
+                "supports_parallel_tool_calls": false,
+                "supports_reasoning_summaries": true,
+                "supports_search_tool": false,
+                "truncation_policy": { "limit": 10000, "mode": "bytes" },
+                "upgrade": null,
+                "visibility": "list"
+            })
+        })
+        .collect();
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "models": entries }))
+        .context("序列化模型目录失败")?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, text).context("写入临时模型目录失败")?;
+    fs::rename(&tmp, &path).context("替换模型目录失败")?;
+    Ok(path)
+}
+
+/// 生成 CodexHelper 托管的第三方服务配置。
+pub fn managed_third_party_config(base_url: &str, models: &[String]) -> String {
+    let mut doc = toml_edit::DocumentMut::new();
+    doc["model"] = toml_edit::value(&models[0]);
+    doc["model_provider"] = toml_edit::value(MANAGED_PROVIDER_ID);
+    doc["model_catalog_json"] =
+        toml_edit::value(model_catalog_path().to_string_lossy().to_string());
+    doc["model_providers"][MANAGED_PROVIDER_ID]["name"] = toml_edit::value("CodexHelper");
+    doc["model_providers"][MANAGED_PROVIDER_ID]["base_url"] = toml_edit::value(base_url);
+    doc["model_providers"][MANAGED_PROVIDER_ID]["wire_api"] = toml_edit::value("responses");
+    doc["model_providers"][MANAGED_PROVIDER_ID]["requires_openai_auth"] =
+        toml_edit::value(true);
+    doc.to_string()
+}
+
+/// 移除上一个第三方账号由 CodexHelper 托管的配置，保留项目、会话和用户其他设置。
+pub fn clear_managed_third_party_config(current: &str) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = current
+        .parse()
+        .context("现有 config.toml 不是合法 TOML，已中止切换")?;
+    let owned_provider = doc
+        .get("model_provider")
+        .and_then(toml_edit::Item::as_str)
+        == Some(MANAGED_PROVIDER_ID);
+    if owned_provider {
+        doc.as_table_mut().remove("model_provider");
+        doc.as_table_mut().remove("model");
+    }
+
+    let owned_catalog = doc
+        .get("model_catalog_json")
+        .and_then(toml_edit::Item::as_str)
+        .is_some_and(|value| PathBuf::from(value) == model_catalog_path());
+    if owned_catalog {
+        doc.as_table_mut().remove("model_catalog_json");
+    }
+
+    if let Some(toml_edit::Item::Table(providers)) = doc.get_mut("model_providers") {
+        providers.remove(MANAGED_PROVIDER_ID);
+        if providers.is_empty() {
+            doc.as_table_mut().remove("model_providers");
+        }
+    }
+    Ok(doc.to_string())
+}
+
 /// 校验一个 auth 对象是否可用作「官方账号」（含有 OAuth token）。
 pub fn is_official_auth(auth: &Value) -> bool {
     auth.get("tokens")
@@ -221,4 +327,27 @@ pub fn account_id_from_auth(auth: &Value) -> Option<String> {
 /// 生成一个「看起来像」的账号备注名，用于导入时的默认命名。
 pub fn default_name_for(auth: &Value) -> String {
     email_from_auth(auth).unwrap_or_else(|| "未命名账号".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_provider_config_can_be_removed_without_touching_shared_settings() {
+        let managed = managed_third_party_config(
+            "https://relay.example.com/v1",
+            &["custom-model".to_string()],
+        );
+        let current = format!(
+            "{managed}\n[projects.\"D:/work\"]\ntrust_level = \"trusted\"\n\n[history]\npersistence = \"save-all\"\n"
+        );
+        let cleared = clear_managed_third_party_config(&current).unwrap();
+        let doc = cleared.parse::<toml_edit::DocumentMut>().unwrap();
+
+        assert!(doc.get("model_provider").is_none());
+        assert!(doc.get("model_catalog_json").is_none());
+        assert!(doc.get("projects").is_some());
+        assert!(doc.get("history").is_some());
+    }
 }

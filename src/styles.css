@@ -662,6 +662,47 @@ select:focus {
   font-size: 11px;
 }
 
+.account-kind-picker {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.kind-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 11px 12px;
+  text-align: left;
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+
+.kind-option:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.kind-option.selected {
+  border-color: var(--accent);
+  background: rgba(145, 132, 237, 0.12);
+}
+
+.kind-option b {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.kind-option span {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.kind-option:disabled {
+  opacity: 1;
+}
+
 /* 等宽编辑区（auth JSON / config 片段） */
 .code-area {
   width: 100%;
@@ -690,6 +731,10 @@ select:focus {
 .code-area::placeholder {
   color: var(--text-faint);
   white-space: pre-wrap;
+}
+
+.model-list-area {
+  min-height: 96px;
 }
 
 /* 实时校验结果 */

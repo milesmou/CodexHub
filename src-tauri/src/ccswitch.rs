@@ -148,6 +148,8 @@ pub fn to_account(p: &CcProvider) -> Account {
                 eprintln!("[codex-helper] 忽略 {} 的无效 config.toml：{e}", p.id);
                 None
             }),
+        base_url: None,
+        models: Vec::new(),
         source: Some("cc-switch".to_string()),
         cc_id: Some(p.id.clone()),
         sort_index: p.sort_index,

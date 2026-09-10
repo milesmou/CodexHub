@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountView, AuthPreview } from "../types";
+import type { AccountKind, AccountView, AuthPreview } from "../types";
 import { api, errorText } from "../api";
 
 interface Props {
@@ -15,23 +15,12 @@ interface Props {
   onError: (msg: string) => void;
 }
 
-/** config.toml 里指向第三方中转的最简模板，点「插入模板」时塞进编辑框。 */
-const THIRD_PARTY_CONFIG_TEMPLATE = `model_provider = "custom"
+const AUTH_PLACEHOLDER =
+  "把官方 auth.json 的完整内容粘贴到这里（含 tokens.access_token / refresh_token）";
 
-[model_providers.custom]
-name = "custom"
-base_url = "https://your-relay.example.com/v1"
-wire_api = "responses"
-requires_openai_auth = true
-`;
-
-const AUTH_PLACEHOLDER = `把 auth.json 的完整内容粘贴到这里，例如：
-
-{
-  "OPENAI_API_KEY": "sk-......"
+function parseModels(text: string): string[] {
+  return [...new Set(text.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean))];
 }
-
-或官方登录态（含 tokens.access_token / refresh_token）`;
 
 export function AddAccountDialog({
   mode,
@@ -42,8 +31,13 @@ export function AddAccountDialog({
   onError,
 }: Props) {
   const [name, setName] = useState(account?.name ?? "");
+  const [kind, setKind] = useState<AccountKind | null>(
+    mode === "edit" ? account?.kind ?? null : null,
+  );
   const [authText, setAuthText] = useState(initialAuth ?? "");
-  const [configText, setConfigText] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [modelsText, setModelsText] = useState("");
   const [preview, setPreview] = useState<AuthPreview | null>(null);
   const [loading, setLoading] = useState(mode === "edit");
   const [saving, setSaving] = useState(false);
@@ -61,7 +55,14 @@ export function AddAccountDialog({
         if (!alive) return;
         setName(cred.name);
         setAuthText(cred.auth);
-        setConfigText(cred.config ?? "");
+        try {
+          const parsed = JSON.parse(cred.auth) as { OPENAI_API_KEY?: unknown };
+          setApiKey(typeof parsed.OPENAI_API_KEY === "string" ? parsed.OPENAI_API_KEY : "");
+        } catch {
+          setApiKey("");
+        }
+        setBaseUrl(cred.base_url ?? "");
+        setModelsText(cred.models.join("\n"));
       } catch (e) {
         onError(errorText(e));
       } finally {
@@ -77,7 +78,12 @@ export function AddAccountDialog({
   useEffect(() => {
     if (previewTimer.current) window.clearTimeout(previewTimer.current);
 
-    const text = authText.trim();
+    const text =
+      kind === "third_party"
+        ? apiKey.trim()
+          ? JSON.stringify({ OPENAI_API_KEY: apiKey.trim() })
+          : ""
+        : authText.trim();
     if (!text) {
       setPreview(null);
       return;
@@ -94,12 +100,7 @@ export function AddAccountDialog({
     return () => {
       if (previewTimer.current) window.clearTimeout(previewTimer.current);
     };
-  }, [authText]);
-
-  // 官方账号只需要 auth.json；即使编辑的是旧数据，也不保留历史 config 片段。
-  useEffect(() => {
-    if (preview?.kind === "official") setConfigText("");
-  }, [preview?.kind]);
+  }, [apiKey, authText, kind]);
 
   // ------------------------------------------------------------ 操作
 
@@ -126,21 +127,11 @@ export function AddAccountDialog({
     }
   }
 
-  async function fillConfigFromCurrent() {
-    try {
-      const text = await api.readCurrentConfigText();
-      if (!text.trim()) {
-        onError("当前没有 config.toml");
-        return;
-      }
-      setConfigText(text);
-    } catch (e) {
-      onError(errorText(e));
-    }
-  }
-
   async function save() {
-    const trimmedAuth = authText.trim();
+    const trimmedAuth =
+      kind === "third_party"
+        ? JSON.stringify({ OPENAI_API_KEY: apiKey.trim() }, null, 2)
+        : authText.trim();
     if (!trimmedAuth) {
       onError("请先填入授权内容");
       return;
@@ -149,22 +140,42 @@ export function AddAccountDialog({
       onError(preview.error || "授权内容校验没通过");
       return;
     }
+    if (!kind) {
+      onError("请先选择账号类型");
+      return;
+    }
+    if (preview?.kind !== kind) {
+      onError(kind === "official" ? "这不是官方 OAuth 登录态" : "这不是第三方 API Key 凭证");
+      return;
+    }
+
+    const models = parseModels(modelsText);
+    if (kind === "third_party" && !baseUrl.trim()) {
+      onError("请填写第三方服务的 Base URL");
+      return;
+    }
+    if (kind === "third_party" && models.length === 0) {
+      onError("请至少填写一个模型");
+      return;
+    }
 
     setSaving(true);
     try {
       if (mode === "edit" && account) {
         const updated = await api.updateAccountCredentials(account.id, {
           auth: trimmedAuth,
-          config: preview?.kind === "third_party" ? configText : "",
+          base_url: kind === "third_party" ? baseUrl.trim() : null,
+          models: kind === "third_party" ? models : [],
           name: name.trim() || null,
         });
         onSaved(updated.name, updated.id);
       } else {
         const created = await api.createAccount({
           name: name.trim(),
+          kind,
           auth: trimmedAuth,
-          config:
-            preview?.kind === "third_party" && configText.trim() ? configText : null,
+          base_url: kind === "third_party" ? baseUrl.trim() : null,
+          models: kind === "third_party" ? models : [],
           source: pickedPath ? `file:${pickedPath}` : "manual",
         });
         onSaved(created.name, created.id);
@@ -182,7 +193,14 @@ export function AddAccountDialog({
     return preview.kind === "official" ? "官方账号" : "第三方账号";
   }, [preview]);
 
-  const canSave = authText.trim().length > 0 && preview?.ok === true && !saving;
+  const models = parseModels(modelsText);
+  const kindMatches = !!kind && preview?.kind === kind;
+  const thirdPartyReady =
+    kind !== "third_party" || (baseUrl.trim().length > 0 && models.length > 0);
+  const credentialReady =
+    kind === "third_party" ? apiKey.trim().length > 0 : authText.trim().length > 0;
+  const canSave =
+    credentialReady && preview?.ok === true && kindMatches && thirdPartyReady && !saving;
 
   return (
     <div className="modal-mask" onClick={onClose}>
@@ -200,6 +218,32 @@ export function AddAccountDialog({
           ) : (
             <>
               <div className="field">
+                <label>账号类型</label>
+                <div className="account-kind-picker">
+                  <button
+                    type="button"
+                    className={kind === "official" ? "kind-option selected" : "kind-option"}
+                    disabled={mode === "edit"}
+                    onClick={() => setKind("official")}
+                  >
+                    <b>官方账号</b>
+                    <span>使用 OAuth auth.json</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={kind === "third_party" ? "kind-option selected" : "kind-option"}
+                    disabled={mode === "edit"}
+                    onClick={() => setKind("third_party")}
+                  >
+                    <b>第三方账号</b>
+                    <span>API Key + Base URL + 模型列表</span>
+                  </button>
+                </div>
+              </div>
+
+              {kind && (
+                <>
+              <div className="field">
                 <label>备注名</label>
                 <input
                   style={{ width: "100%" }}
@@ -210,43 +254,60 @@ export function AddAccountDialog({
               </div>
 
               <div className="field">
-                <div className="field-row">
-                  <label>授权内容（auth.json）</label>
-                  <div className="mini-actions">
-                    <button className="ghost" onClick={pickFile}>
-                      从文件导入
-                    </button>
-                    {mode === "create" && (
+                {kind === "official" ? (
+                  <>
+                    <div className="field-row">
+                      <label>授权内容（auth.json）</label>
+                      <div className="mini-actions">
+                        <button className="ghost" onClick={pickFile}>
+                          从文件导入
+                        </button>
+                        {mode === "create" && (
                       <button className="ghost" onClick={fillFromCurrent}>
                         用当前登录态
                       </button>
-                    )}
-                  </div>
-                </div>
-                <textarea
-                  className="code-area"
-                  spellCheck={false}
-                  value={authText}
-                  placeholder={AUTH_PLACEHOLDER}
-                  onChange={(e) => {
-                    setAuthText(e.target.value);
-                    setPickedPath(null);
-                  }}
-                />
-                {pickedPath && (
-                  <p className="hint">已读取：{pickedPath}</p>
+                        )}
+                      </div>
+                    </div>
+                    <textarea
+                      className="code-area"
+                      spellCheck={false}
+                      value={authText}
+                      placeholder={AUTH_PLACEHOLDER}
+                      onChange={(e) => {
+                        setAuthText(e.target.value);
+                        setPickedPath(null);
+                      }}
+                    />
+                    {pickedPath && <p className="hint">已读取：{pickedPath}</p>}
+                  </>
+                ) : (
+                  <>
+                    <label>API Key</label>
+                    <input
+                      style={{ width: "100%" }}
+                      value={apiKey}
+                      placeholder="sk-..."
+                      spellCheck={false}
+                      onChange={(e) => setApiKey(e.target.value)}
+                    />
+                  </>
                 )}
 
                 {preview && (
-                  <div className={`preview-box ${preview.ok ? "ok" : "err"}`}>
+                  <div
+                    className={`preview-box ${preview.ok && preview.kind === kind ? "ok" : "err"}`}
+                  >
                     <div className="preview-head">
                       <span className={`badge ${preview.kind === "official" ? "" : "third"}`}>
                         {kindLabel ?? "无法识别"}
                       </span>
-                      {preview.ok ? (
+                      {preview.ok && preview.kind === kind ? (
                         <span className="preview-state ok">校验通过</span>
                       ) : (
-                        <span className="preview-state err">校验未通过</span>
+                        <span className="preview-state err">
+                          {preview.ok ? "与所选类型不一致" : "校验未通过"}
+                        </span>
                       )}
                     </div>
                     {preview.credential && (
@@ -265,34 +326,34 @@ export function AddAccountDialog({
                 )}
               </div>
 
-              {preview?.kind === "third_party" && (
-                <div className="field">
-                  <div className="field-row">
-                    <label>第三方服务配置（config.toml）</label>
-                    <div className="mini-actions">
-                      <button
-                        className="ghost"
-                        onClick={() => setConfigText(THIRD_PARTY_CONFIG_TEMPLATE)}
-                      >
-                        插入第三方模板
-                      </button>
-                      <button className="ghost" onClick={fillConfigFromCurrent}>
-                        以当前配置为模板
-                      </button>
-                    </div>
+              {kind === "third_party" && (
+                <>
+                  <div className="field">
+                    <label>Base URL</label>
+                    <input
+                      style={{ width: "100%" }}
+                      value={baseUrl}
+                      placeholder="https://your-relay.example.com/v1"
+                      onChange={(e) => setBaseUrl(e.target.value)}
+                    />
                   </div>
-                  <textarea
-                    className="code-area"
-                    spellCheck={false}
-                    value={configText}
-                    placeholder="切换到这个账号时会合并进 ~/.codex/config.toml（只覆盖第三方服务设置）"
-                    onChange={(e) => setConfigText(e.target.value)}
-                  />
-                  <p className="hint">
-                    第三方中转账号需要在这里配上 <code>[model_providers.*]</code>，
-                    指向中转地址。项目配置和会话记录不会随账号切换，所有账号共用。
-                  </p>
-                </div>
+
+                  <div className="field">
+                    <label>模型列表</label>
+                    <textarea
+                      className="code-area model-list-area"
+                      spellCheck={false}
+                      value={modelsText}
+                      placeholder={"每行一个模型，例如：\ngpt-5.4\ngpt-5.3-codex"}
+                      onChange={(e) => setModelsText(e.target.value)}
+                    />
+                    <p className="hint">
+                      第一项作为默认模型；也支持用逗号分隔。项目和会话记录仍由所有账号共用。
+                    </p>
+                  </div>
+                </>
+              )}
+                </>
               )}
             </>
           )}

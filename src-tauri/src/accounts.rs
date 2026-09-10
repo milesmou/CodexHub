@@ -17,11 +17,16 @@ use serde_json::Value;
 pub struct NewAccountPayload {
     /// 备注名
     pub name: String,
+    /// 用户在表单中明确选择的账号类型
+    pub kind: AccountKind,
     /// auth.json 原文
     pub auth: String,
-    /// config.toml 片段，可空
+    /// 第三方服务地址，官方账号忽略
     #[serde(default)]
-    pub config: Option<String>,
+    pub base_url: Option<String>,
+    /// 第三方模型列表，官方账号忽略
+    #[serde(default)]
+    pub models: Vec<String>,
     /// 来源标记，仅作记录
     #[serde(default)]
     pub source: Option<String>,
@@ -169,6 +174,34 @@ pub fn normalize_config_snippet(
     }
 }
 
+/// 校验并规范化第三方服务地址。
+pub fn normalize_base_url(value: Option<&str>) -> Result<String> {
+    let value = value
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("第三方账号必须填写 Base URL"))?;
+    let parsed = reqwest::Url::parse(value).context("Base URL 格式不正确")?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err(anyhow!("Base URL 必须是有效的 http/https 地址"));
+    }
+    Ok(value.trim_end_matches('/').to_string())
+}
+
+/// 去空、去重后的第三方模型列表。
+pub fn normalize_models(values: &[String]) -> Result<Vec<String>> {
+    let mut models = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty() && !models.iter().any(|v| v == value) {
+            models.push(value.to_string());
+        }
+    }
+    if models.is_empty() {
+        return Err(anyhow!("第三方账号至少需要填写一个模型"));
+    }
+    Ok(models)
+}
+
 /// 由表单构造一条账号记录。
 pub fn build_account(
     payload: &NewAccountPayload,
@@ -184,8 +217,21 @@ pub fn build_account(
         return Err(anyhow!(err));
     }
 
-    let kind = classify(&auth);
-    let config = normalize_config_snippet(kind, payload.config.as_deref())?;
+    let detected_kind = classify(&auth);
+    if detected_kind != payload.kind {
+        return Err(anyhow!(match payload.kind {
+            AccountKind::Official => "所选类型是官方账号，但 auth.json 不是官方 OAuth 登录态",
+            AccountKind::ThirdParty => "所选类型是第三方账号，但 auth.json 不是 API Key 凭证",
+        }));
+    }
+
+    let (base_url, models) = match payload.kind {
+        AccountKind::Official => (None, Vec::new()),
+        AccountKind::ThirdParty => (
+            Some(normalize_base_url(payload.base_url.as_deref())?),
+            normalize_models(&payload.models)?,
+        ),
+    };
 
     let name = payload.name.trim();
     let name = if name.is_empty() {
@@ -200,9 +246,11 @@ pub fn build_account(
         email: codex::email_from_auth(&auth),
         plan_type: None,
         account_id: codex::account_id_from_auth(&auth),
-        kind,
+        kind: payload.kind,
         auth,
-        config,
+        config: None,
+        base_url,
+        models,
         source: Some(payload.source.clone().unwrap_or_else(|| "manual".to_string())),
         cc_id: None,
         sort_index,
@@ -247,5 +295,25 @@ persistence = "save-all"
         assert!(doc.get("model_providers").is_some());
         assert!(doc.get("projects").is_none());
         assert!(doc.get("history").is_none());
+    }
+
+    #[test]
+    fn third_party_fields_are_normalized() {
+        assert_eq!(
+            normalize_base_url(Some(" https://relay.example.com/v1/ ")).unwrap(),
+            "https://relay.example.com/v1"
+        );
+        assert!(normalize_base_url(Some("file:///tmp/api")).is_err());
+
+        let models = vec![
+            " gpt-custom ".to_string(),
+            "gpt-custom".to_string(),
+            "other-model".to_string(),
+        ];
+        assert_eq!(
+            normalize_models(&models).unwrap(),
+            vec!["gpt-custom", "other-model"]
+        );
+        assert!(normalize_models(&[]).is_err());
     }
 }
