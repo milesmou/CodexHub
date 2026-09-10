@@ -772,7 +772,7 @@ select:focus {
   color: var(--accent);
 }
 
-/* 会被关掉的进程清单 */
+/* 切换账号时关闭 Codex 的提示 */
 .confirm-warn {
   border: 1px solid #6b5322;
   background: var(--warn-dim);
@@ -784,7 +784,6 @@ select:focus {
   display: block;
   font-size: 12px;
   color: #f5cf8a;
-  margin-bottom: 9px;
 }
 
 .confirm-warn-foot {
@@ -797,49 +796,6 @@ select:focus {
 .confirm-warn-foot b {
   font-weight: 500;
   color: #f5cf8a;
-}
-
-.proc-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.proc-list li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-}
-
-.proc-tag {
-  flex-shrink: 0;
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.1);
-  color: #d9bb85;
-}
-
-.proc-tag.app {
-  background: rgba(238, 174, 77, 0.22);
-  color: #f5cf8a;
-}
-
-.proc-list code {
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
-  color: #f0e2c6;
-  word-break: break-all;
-}
-
-.proc-count {
-  flex-shrink: 0;
-  margin-left: auto;
-  color: #d9bb85;
 }
 
 /* ---------------------------------------------------------------- 提示 */
@@ -1228,4 +1184,3 @@ select:focus {
   font-size: 10px;
   color: var(--text-dim);
 }
-

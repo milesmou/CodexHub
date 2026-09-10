@@ -11,18 +11,6 @@ interface Props {
   onCancel: () => void;
 }
 
-/** 把进程列表压成「ChatGPT.exe × 9」这种形式，别把 11 行全铺出来。 */
-function groupProcs(status: CodexAppStatus): { name: string; count: number; app: boolean }[] {
-  const map = new Map<string, { name: string; count: number; app: boolean }>();
-  for (const p of status.procs) {
-    const hit = map.get(p.name);
-    if (hit) hit.count += 1;
-    else map.set(p.name, { name: p.name, count: 1, app: p.app });
-  }
-  // 桌面应用本体排前面
-  return [...map.values()].sort((a, b) => Number(b.app) - Number(a.app));
-}
-
 /**
  * 切换账号前的确认框。
  *
@@ -38,7 +26,6 @@ export function SwitchConfirm({
   onCancel,
 }: Props) {
   const hasProcs = !!status && status.count > 0;
-  const groups = status ? groupProcs(status) : [];
 
   return (
     <div className="modal-mask" onClick={busy ? undefined : onCancel}>
@@ -67,28 +54,14 @@ export function SwitchConfirm({
           )}
 
           {hasProcs && (
-            <>
-              <div className="confirm-warn">
-                <span className="confirm-warn-title">
-                  将关闭 {status!.count} 个 Codex 进程，切换完成后自动重新打开
-                </span>
-                <ul className="proc-list">
-                  {groups.map((g) => (
-                    <li key={g.name}>
-                      <span className={`proc-tag ${g.app ? "app" : ""}`}>
-                        {g.app ? "桌面应用" : "命令行"}
-                      </span>
-                      <code>{g.name}</code>
-                      <span className="proc-count">× {g.count}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="confirm-warn-foot">
-                  Codex 是在启动时读取账号的，不重启就换不了账号。
-                  <b>正在进行的对话会中断，未保存的内容可能丢失。</b>
-                </p>
-              </div>
-            </>
+            <div className="confirm-warn">
+              <span className="confirm-warn-title">
+                切换账号会关闭 Codex，完成后自动重新打开。
+              </span>
+              <p className="confirm-warn-foot">
+                <b>正在进行的对话会中断，未保存的内容可能丢失。</b>
+              </p>
+            </div>
           )}
 
           {status && !hasProcs && (
