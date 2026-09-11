@@ -244,6 +244,7 @@ select:focus {
 }
 
 .card {
+  --text-faint: #858596;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
