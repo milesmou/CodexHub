@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { DragEvent } from "react";
 import type { AccountView, QuotaWindow } from "../types";
 import { QuotaRing } from "./QuotaRing";
 import {
@@ -21,6 +22,12 @@ interface Props {
   warming: boolean;
   /** 有任何激活任务在跑（含批量），此时所有激活按钮都要禁用，避免重复发请求 */
   warmupLocked: boolean;
+  dragging: boolean;
+  dragTarget: boolean;
+  onDragStart: (id: string) => void;
+  onDragOver: (id: string) => void;
+  onDrop: (id: string) => void;
+  onDragEnd: () => void;
   onSwitch: (id: string) => void;
   onRename: (id: string, name: string) => void;
   onEdit: (id: string) => void;
@@ -92,6 +99,12 @@ export function AccountCard({
   requesting,
   warming,
   warmupLocked,
+  dragging,
+  dragTarget,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
   onSwitch,
   onRename,
   onEdit,
@@ -119,15 +132,40 @@ export function AccountCard({
     setEditing(false);
   }
 
+  function startDragging(event: DragEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, select, textarea")) {
+      event.preventDefault();
+      return;
+    }
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", account.id);
+    onDragStart(account.id);
+  }
+
   return (
     <div
       className={[
         "card",
         account.is_current ? "current" : "",
         exhausted && !account.is_current ? "offline" : "",
+        dragging ? "dragging" : "",
+        dragTarget ? "drag-target" : "",
       ]
         .filter(Boolean)
         .join(" ")}
+      draggable={!editing}
+      onDragStart={startDragging}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        onDragOver(account.id);
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDrop(account.id);
+      }}
+      onDragEnd={onDragEnd}
     >
       <div className="card-head">
         <div className={`avatar ${isOfficial ? "" : "third"}`}>

@@ -1,6 +1,6 @@
 //! 账号库的落盘与读取。
 //!
-//! 数据目录：`~/.codex-helper/`
+//! 数据目录：`~/.codex-hub/`
 //! - `vault.enc`  —— AES-256-GCM 加密后的账号库
 //! - `backups/`   —— 每次切换前备份的 auth.json
 //!
@@ -22,7 +22,7 @@ pub fn home_dir() -> PathBuf {
 
 /// 本工具的数据目录。
 pub fn data_dir() -> PathBuf {
-    home_dir().join(".codex-helper")
+    home_dir().join(".codex-hub")
 }
 
 /// 加密账号库路径。

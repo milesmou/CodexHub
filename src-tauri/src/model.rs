@@ -131,15 +131,6 @@ pub struct AccountView {
     pub source: Option<String>,
 }
 
-/// 主窗口隐藏后使用哪种常驻入口。
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum StatusMode {
-    #[default]
-    Tray,
-    Taskbar,
-}
-
 /// 定时刷新与行为相关的设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -155,26 +146,29 @@ pub struct Settings {
     pub notify_on_reset: bool,
     /// 关闭窗口时最小化到托盘而不是退出
     pub minimize_to_tray: bool,
-    /// 常驻入口：系统托盘图标，或任务栏文字浮层。
-    #[serde(default)]
-    pub status_mode: StatusMode,
+    /// 是否让任务栏状态浮层始终显示；托盘图标不受此项影响。
+    #[serde(default = "default_true")]
+    pub taskbar_status_enabled: bool,
     /// 自动激活：刷新时发现某账号的 5 小时窗口从未启动，就替它发一条会话把窗口点着。
-    /// 默认关闭 —— 这会在用户没操作时主动发请求，得让用户自己点头。
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub warmup_auto: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             refresh_interval_secs: 300,
-            startup: false,
+            startup: true,
             shortcut: "Ctrl+Alt+C".to_string(),
-            notify_on_limit: true,
+            notify_on_limit: false,
             notify_on_reset: true,
             minimize_to_tray: true,
-            status_mode: StatusMode::Tray,
-            warmup_auto: false,
+            taskbar_status_enabled: true,
+            warmup_auto: true,
         }
     }
 }
@@ -220,13 +214,36 @@ impl Vault {
     }
 }
 
-/// 从 auth.json 中提取指纹，用于去重。
+/// 从 auth.json 中提取稳定指纹，用于去重和识别当前账号。
+///
+/// refresh_token 每次刷新后都可能轮换，不能把它作为已有账号的主身份，
+/// 否则同一个账号刷新一次就会匹配失败。官方账号优先使用稳定的 account_id；
+/// 只有旧格式里没有 account_id 时，才退回 refresh_token 前缀。
 pub fn auth_fingerprint(auth: &serde_json::Value) -> Option<String> {
     let t = auth.get("tokens")?;
     let acc = t.get("account_id").and_then(|v| v.as_str()).unwrap_or("");
-    let rt = t.get("refresh_token").and_then(|v| v.as_str()).unwrap_or("");
-    if acc.is_empty() && rt.is_empty() {
-        return None;
+    let rt = t
+        .get("refresh_token")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if !acc.is_empty() {
+        return Some(format!("account:{acc}"));
     }
-    Some(format!("{acc}|{}", &rt[..rt.len().min(16)]))
+    if !rt.is_empty() {
+        return Some(format!("refresh:{}", &rt[..rt.len().min(16)]));
+    }
+    None
+}
+
+#[cfg(test)]
+mod auth_fingerprint_tests {
+    use super::auth_fingerprint;
+    use serde_json::json;
+
+    #[test]
+    fn fingerprint_survives_refresh_token_rotation() {
+        let before = json!({"tokens": {"account_id": "acc-1", "refresh_token": "old"}});
+        let after = json!({"tokens": {"account_id": "acc-1", "refresh_token": "new"}});
+        assert_eq!(auth_fingerprint(&before), auth_fingerprint(&after));
+    }
 }

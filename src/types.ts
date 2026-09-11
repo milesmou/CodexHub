@@ -44,8 +44,8 @@ export interface Settings {
   notify_on_limit: boolean;
   notify_on_reset: boolean;
   minimize_to_tray: boolean;
-  /** 主窗口隐藏后的常驻入口 */
-  status_mode: "tray" | "taskbar";
+  /** 是否让任务栏状态浮层始终显示 */
+  taskbar_status_enabled: boolean;
   /** 刷新时发现 5 小时窗口从未启动，就自动发一条会话把它点着 */
   warmup_auto: boolean;
 }

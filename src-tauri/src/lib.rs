@@ -17,15 +17,11 @@ mod scheduler;
 mod tray;
 
 use commands::AppState;
-use model::StatusMode;
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// 把主窗口显示出来并聚焦。
 pub fn show_window(app: &AppHandle) {
-    if let Some(status) = app.get_webview_window("taskbar-status") {
-        let _ = status.hide();
-    }
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.unminimize();
@@ -48,13 +44,13 @@ pub fn toggle_window(app: &AppHandle) {
 /// Windows 在主窗口最小化或隐藏时会重新调整任务栏的 Z 序，顺手把状态浮层
 /// 提回任务栏上方。状态窗不获取焦点，所以不会打断用户当前操作。
 fn show_background_surface(app: &AppHandle) {
-    let mode = {
+    let enabled = {
         let state = app.state::<AppState>();
         let vault = state.vault.lock().unwrap();
-        vault.settings.status_mode
+        vault.settings.taskbar_status_enabled
     };
     if let Some(status) = app.get_webview_window("taskbar-status") {
-        if mode == StatusMode::Taskbar {
+        if enabled {
             let _ = status.show();
             let _ = status.set_always_on_top(true);
         } else {
@@ -96,12 +92,12 @@ fn start_status_topmost_guard(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let taskbar_mode = {
+            let taskbar_status_enabled = {
                 let state = app.state::<AppState>();
                 let vault = state.vault.lock().unwrap();
-                vault.settings.status_mode == StatusMode::Taskbar
+                vault.settings.taskbar_status_enabled
             };
-            if !taskbar_mode {
+            if !taskbar_status_enabled {
                 continue;
             }
             if let Some(status) = app.get_webview_window("taskbar-status") {
@@ -148,16 +144,12 @@ pub fn apply_settings(app: &AppHandle) {
     }
 
 
-    // 两种常驻入口互斥。主窗口显示时，任务栏浮层暂时隐藏。
+    // 托盘图标始终可用；任务栏浮层是独立的常驻选项。
     if let Some(tray) = app.tray_by_id(tray::TRAY_ID) {
-        let _ = tray.set_visible(settings.status_mode == StatusMode::Tray);
+        let _ = tray.set_visible(true);
     }
     if let Some(status) = app.get_webview_window("taskbar-status") {
-        let main_hidden = app
-            .get_webview_window("main")
-            .map(|w| !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false))
-            .unwrap_or(true);
-        if settings.status_mode == StatusMode::Taskbar && main_hidden {
+        if settings.taskbar_status_enabled {
             let _ = status.show();
             let _ = status.set_always_on_top(true);
         } else {
@@ -197,6 +189,7 @@ pub fn run() {
             commands::switch_account,
             commands::delete_account,
             commands::update_account,
+            commands::reorder_accounts,
             commands::get_settings,
             commands::set_settings,
             commands::popup_status_menu,
@@ -245,7 +238,7 @@ pub fn run() {
                 }
             }
 
-            // 浮层模式关闭主窗口时必须驻留；托盘模式继续遵循原来的开关。
+            // 后台驻留和任务栏悬浮框是两个独立开关；任一开启都不能退出后台。
             if window.label() == "main" {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     let app = window.app_handle();
@@ -253,7 +246,7 @@ pub fn run() {
                         let state = app.state::<AppState>();
                         let vault = state.vault.lock().unwrap();
                         vault.settings.minimize_to_tray
-                            || vault.settings.status_mode == StatusMode::Taskbar
+                            || vault.settings.taskbar_status_enabled
                     };
                     if keep_running {
                         api.prevent_close();

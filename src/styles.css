@@ -258,6 +258,24 @@ select:focus {
   background: linear-gradient(180deg, #232134 0%, var(--surface) 100%);
 }
 
+.card[draggable="true"] {
+  cursor: grab;
+}
+
+.card[draggable="true"]:active {
+  cursor: grabbing;
+}
+
+.card.dragging {
+  opacity: 0.42;
+  transform: scale(0.985);
+}
+
+.card.drag-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-dim);
+}
+
 .card.offline {
   opacity: 0.62;
 }

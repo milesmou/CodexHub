@@ -77,14 +77,10 @@ async function placeOnTaskbar() {
 
 /** Windows 的最小化事件在部分版本上不稳定，状态窗自己复核一次可见性。 */
 async function syncVisibility() {
-  const [settings, windows] = await Promise.all([api.getSettings(), getAllWindows()]);
+  const settings = await api.getSettings();
   const status = getCurrentWindow();
-  const main = windows.find((win) => win.label === "main");
-  const mainHidden = main
-    ? !(await main.isVisible()) || (await main.isMinimized())
-    : true;
 
-  if (settings.status_mode === "taskbar" && mainHidden) {
+  if (settings.taskbar_status_enabled) {
     await status.show();
     await status.setAlwaysOnTop(true);
   } else {
@@ -169,7 +165,6 @@ export default function TaskbarStatus() {
   async function openMainWindow() {
     const main = (await getAllWindows()).find((win) => win.label === "main");
     if (!main) return;
-    await getCurrentWindow().hide();
     await main.show();
     await main.unminimize();
     await main.setFocus();

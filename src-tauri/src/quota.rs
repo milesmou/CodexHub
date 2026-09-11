@@ -212,6 +212,11 @@ async fn refresh_token(client: &reqwest::Client, auth: &Value) -> Result<Value> 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
+        if body.contains("invalid_grant") || body.contains("refresh token has already been used") {
+            return Err(anyhow!(
+                "登录凭证已过期或已被其他 Codex 实例更新，请重新登录该账号"
+            ));
+        }
         return Err(anyhow!(
             "刷新返回 {status}：{}",
             body.chars().take(160).collect::<String>()

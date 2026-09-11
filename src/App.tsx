@@ -48,6 +48,8 @@ export default function App() {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragTargetId, setDragTargetId] = useState<string | null>(null);
 
   // 每 5 秒重渲染一次，让「重置倒计时」和「多久前更新」自己走
   const [, setTick] = useState(0);
@@ -272,6 +274,36 @@ export default function App() {
     [reload, showToast],
   );
 
+  const finishDragging = useCallback(() => {
+    setDraggingId(null);
+    setDragTargetId(null);
+  }, []);
+
+  const dropAccount = useCallback(
+    async (targetId: string) => {
+      const sourceId = draggingId;
+      finishDragging();
+      if (!sourceId || sourceId === targetId) return;
+
+      const from = accounts.findIndex((account) => account.id === sourceId);
+      const to = accounts.findIndex((account) => account.id === targetId);
+      if (from < 0 || to < 0) return;
+
+      const reordered = [...accounts];
+      const [moved] = reordered.splice(from, 1);
+      reordered.splice(to, 0, moved);
+      setAccounts(reordered);
+
+      try {
+        setAccounts(await api.reorderAccounts(reordered.map((account) => account.id)));
+      } catch (e) {
+        showToast(errorText(e));
+        await reload();
+      }
+    },
+    [accounts, draggingId, finishDragging, reload, showToast],
+  );
+
   /** 打开某个账号的「编辑授权」弹窗 */
   const doEdit = useCallback(
     (id: string) => {
@@ -425,6 +457,15 @@ export default function App() {
                 warmupLocked={
                   refreshingIds.size > 0 || warmingAll || warmingId !== null
                 }
+                dragging={draggingId === a.id}
+                dragTarget={dragTargetId === a.id && draggingId !== a.id}
+                onDragStart={(id) => {
+                  setDraggingId(id);
+                  setDragTargetId(id);
+                }}
+                onDragOver={setDragTargetId}
+                onDrop={(id) => void dropAccount(id)}
+                onDragEnd={finishDragging}
                 onSwitch={requestSwitch}
                 onRename={doRename}
                 onEdit={doEdit}

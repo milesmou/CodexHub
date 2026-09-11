@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Paths, Settings } from "../types";
 import { api, errorText } from "../api";
 
@@ -27,12 +27,10 @@ export function SettingsDrawer({
   onError,
 }: Props) {
   const [draft, setDraft] = useState<Settings>(settings);
-  const [saving, setSaving] = useState(false);
+  const draftRef = useRef(settings);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
   // undefined = 还在查，null = 没找到
   const [cliPath, setCliPath] = useState<string | null | undefined>(undefined);
-
-  // 外部设置变化时同步一次，避免打开面板时是旧值
-  useEffect(() => setDraft(settings), [settings]);
 
   // 查一下 codex CLI 在哪，自动激活要靠它
   useEffect(() => {
@@ -47,20 +45,15 @@ export function SettingsDrawer({
   }, []);
 
   function patch<K extends keyof Settings>(key: K, value: Settings[K]) {
-    setDraft((prev) => ({ ...prev, [key]: value }));
-  }
+    const next = { ...draftRef.current, [key]: value };
+    draftRef.current = next;
+    setDraft(next);
 
-  async function save() {
-    setSaving(true);
-    try {
-      await api.setSettings(draft);
-      onSaved(draft);
-      onClose();
-    } catch (e) {
-      onError(errorText(e));
-    } finally {
-      setSaving(false);
-    }
+    // 连续操作按发生顺序落盘，避免较慢的旧请求覆盖后发的新设置。
+    saveQueue.current = saveQueue.current
+      .then(() => api.setSettings(next))
+      .then(() => onSaved(next))
+      .catch((e) => onError(errorText(e)));
   }
 
   return (
@@ -107,50 +100,47 @@ export function SettingsDrawer({
 
           <div className="field">
             <label>行为</label>
-            <label>后台常驻方式</label>
-            <select
-              style={{ width: "100%", marginBottom: 8 }}
-              value={draft.status_mode}
-              onChange={(e) =>
-                patch("status_mode", e.target.value as Settings["status_mode"])
-              }
-            >
-              <option value="tray">系统托盘图标</option>
-              <option value="taskbar">任务栏状态浮层</option>
-            </select>
-            <p className="hint">
-              状态浮层会在主窗口最小化或关闭后出现，右键菜单与托盘图标一致。
-            </p>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.minimize_to_tray}
-                onChange={(e) => patch("minimize_to_tray", e.target.checked)}
-              />
-              关闭主窗口时驻留后台，不退出
-            </label>
             <label className="checkbox">
               <input
                 type="checkbox"
                 checked={draft.startup}
                 onChange={(e) => patch("startup", e.target.checked)}
               />
-              开机自动启动
+              开启自启
             </label>
             <label className="checkbox">
+              <input
+                type="checkbox"
+                checked={draft.minimize_to_tray}
+                onChange={(e) => patch("minimize_to_tray", e.target.checked)}
+              />
+              后台运行
+            </label>
+            <label
+              className="checkbox"
+              title="开启后主窗口显示时也不会隐藏；单击悬浮框可打开主窗口，右键可打开账号菜单。"
+            >
+              <input
+                type="checkbox"
+                checked={draft.taskbar_status_enabled}
+                onChange={(e) => patch("taskbar_status_enabled", e.target.checked)}
+              />
+              任务栏悬浮框
+            </label>
+            <label
+              className="checkbox"
+              title={
+                "Codex 的 5 小时窗口需使用一次才开始计时。开启后，刷新额度发现官方账号窗口未启动时，" +
+                "会通过 codex CLI 发一条极简会话进行激活；同一账号 30 分钟内只执行一次，且不会改动当前登录态。"
+              }
+            >
               <input
                 type="checkbox"
                 checked={draft.warmup_auto}
                 onChange={(e) => patch("warmup_auto", e.target.checked)}
               />
-              自动激活未启动的 5 小时窗口
+              自动激活未启动的5h窗口
             </label>
-            <p className="hint">
-              Codex 的 5 小时窗口是「用一次才开始计时」的，账号一直不用就永远等不到重置。
-              打开这项后，刷新额度时发现某个官方账号的窗口从未启动，就会用 codex CLI
-              以该账号身份发一条极简会话把它点着。
-              同一账号 30 分钟内只会点一次；不会改动你当前的登录态。
-            </p>
           </div>
 
           <div className="field">
@@ -206,19 +196,6 @@ export function SettingsDrawer({
           </div>
         </div>
 
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            padding: 16,
-            borderTop: "1px solid var(--border)",
-          }}
-        >
-          <button className="primary" style={{ flex: 1 }} disabled={saving} onClick={save}>
-            {saving ? "保存中…" : "保存设置"}
-          </button>
-          <button onClick={onClose}>取消</button>
-        </div>
       </div>
     </div>
   );

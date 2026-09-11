@@ -40,6 +40,9 @@ export const api = {
     patch: { name?: string; hidden?: boolean; sort_index?: number },
   ) => invoke<void>("update_account", { id, ...patch }),
 
+  reorderAccounts: (ids: string[]) =>
+    invoke<AccountView[]>("reorder_accounts", { ids }),
+
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   popupStatusMenu: (cursorX: number) =>

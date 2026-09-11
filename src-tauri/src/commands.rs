@@ -6,7 +6,7 @@
 use crate::model::*;
 use crate::{accounts, codex, codexapp, quota, stats, store, tray, warmup};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -125,8 +125,12 @@ pub async fn refresh_quotas_inner(
     app: &AppHandle,
     ids: Option<Vec<String>>,
 ) -> Result<Vec<AccountView>, String> {
+    // 当前账号可能刚被 Codex 自己轮换过 token。查询前优先采用磁盘上的最新登录态，
+    // 避免账号库拿旧 refresh_token 再换一次而触发 invalid_grant。
+    sync_current_from_disk(app);
+
     // 1. 取出待刷新账号的快照
-    let targets: Vec<(String, serde_json::Value)> = snapshot(app, |vault| {
+    let mut targets: Vec<(String, serde_json::Value)> = snapshot(app, |vault| {
         vault
             .accounts
             .iter()
@@ -139,14 +143,26 @@ pub async fn refresh_quotas_inner(
             .collect()
     });
 
-    let target_ids: Vec<String> = targets.iter().map(|(id, _)| id.clone()).collect();
+    // 同一账号只允许一个额度请求在途。否则两个请求会拿到相同的单次 refresh_token，
+    // 第一个轮换成功后，第二个必然得到 "refresh token has already been used"。
     {
         let state = app.state::<AppState>();
         let mut active = state.refresh_active.lock().unwrap();
-        for id in &target_ids {
-            *active.entry(id.clone()).or_default() += 1;
-        }
+        targets.retain(|(id, _)| {
+            if active.contains_key(id) {
+                false
+            } else {
+                active.insert(id.clone(), 1);
+                true
+            }
+        });
     }
+
+    if targets.is_empty() {
+        return Ok(snapshot(app, to_views));
+    }
+
+    let target_ids: Vec<String> = targets.iter().map(|(id, _)| id.clone()).collect();
     let _ = app.emit("refresh-started", &target_ids);
 
     // 2. 并发查询，某一家慢或挂掉不影响其他账号
@@ -420,18 +436,34 @@ pub fn switch_account_inner(
 /// 启动时用当前 auth.json 校准「当前账号」是哪一个。
 pub fn sync_current_from_disk(app: &AppHandle) {
     let Ok(auth) = codex::read_auth() else { return };
-    let Some(fp) = auth_fingerprint(&auth) else { return };
+    let Some(fp) = auth_fingerprint(&auth) else {
+        return;
+    };
 
     let state = app.state::<AppState>();
     let mut vault = state.vault.lock().unwrap();
-    let found = vault
+    let found_index = vault
         .accounts
         .iter()
-        .find(|a| auth_fingerprint(&a.auth).as_deref() == Some(fp.as_str()))
-        .map(|a| a.id.clone());
+        .position(|a| auth_fingerprint(&a.auth).as_deref() == Some(fp.as_str()));
+    let found = found_index.map(|index| vault.accounts[index].id.clone());
+    let mut changed = false;
 
     if vault.current_id != found {
-        vault.current_id = found;
+        vault.current_id = found.clone();
+        changed = true;
+    }
+
+    // Codex 可能已经把轮换后的 token 写回 auth.json；同步到账号库，后续即使
+    // Codex 已关闭，额度刷新也不会再使用失效的旧 refresh_token。
+    if let Some(index) = found_index {
+        if vault.accounts[index].kind == AccountKind::Official && vault.accounts[index].auth != auth {
+            vault.accounts[index].auth = auth;
+            changed = true;
+        }
+    }
+
+    if changed {
         let _ = store::save(&vault);
     }
 }
@@ -523,6 +555,35 @@ pub fn update_account(
         acc.sort_index = s;
     }
     persist(&app, &vault)
+}
+
+/// 按前端给出的完整 id 顺序一次性重排账号，避免逐条更新造成中间状态闪动。
+#[tauri::command]
+pub fn reorder_accounts(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> Result<Vec<AccountView>, String> {
+    let mut vault = state.vault.lock().unwrap();
+    let unique: HashSet<&str> = ids.iter().map(String::as_str).collect();
+    if ids.len() != vault.accounts.len()
+        || unique.len() != ids.len()
+        || ids.iter().any(|id| vault.find(id).is_none())
+    {
+        return Err("账号顺序无效，请刷新后重试".to_string());
+    }
+
+    let positions: HashMap<&str, i32> = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index as i32))
+        .collect();
+    for account in &mut vault.accounts {
+        account.sort_index = positions[account.id.as_str()];
+    }
+
+    persist(&app, &vault)?;
+    Ok(to_views(&vault))
 }
 
 #[tauri::command]
