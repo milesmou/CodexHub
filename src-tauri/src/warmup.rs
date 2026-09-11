@@ -37,6 +37,9 @@ const TIMEOUT: Duration = Duration::from_secs(90);
 /// 所以越短越省，也别让模型真去干活。
 const PROMPT: &str = "Reply with the single word: ok";
 
+/// 激活窗口不需要代码能力，固定使用低成本模型，避免继承用户配置里的高价模型。
+const MODEL: &str = "gpt-5.6-luna";
+
 /// 临时 CODEX_HOME 的 config.toml：只读沙箱 + 不询问，
 /// 保证 CLI 在无人值守下也能跑完，且不会去改任何文件。
 const SANDBOX_CONFIG: &str = r#"sandbox_mode = "read-only"
@@ -175,6 +178,10 @@ async fn run_isolated(cli: &Path, home: &Path, auth: &serde_json::Value) -> Resu
         .arg("--skip-git-repo-check") // 临时目录不是 git 仓库
         .arg("--ephemeral") // 不落会话文件
         .arg("--ignore-user-config") // 不吃用户的 config.toml（auth 仍读 CODEX_HOME）
+        .arg("--model")
+        .arg(MODEL)
+        .arg("--config")
+        .arg("model_reasoning_effort=\"none\"")
         .arg("-s")
         .arg("read-only")
         .arg("-C")
