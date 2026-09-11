@@ -18,8 +18,8 @@ interface Props {
 const AUTH_PLACEHOLDER =
   "把官方 auth.json 的完整内容粘贴到这里（含 tokens.access_token / refresh_token）";
 
-function parseModels(text: string): string[] {
-  return [...new Set(text.split(/[\n,，]+/).map((item) => item.trim()).filter(Boolean))];
+function normalizeModels(values: string[]): string[] {
+  return [...new Set(values.map((item) => item.trim()).filter(Boolean))];
 }
 
 export function AddAccountDialog({
@@ -37,7 +37,10 @@ export function AddAccountDialog({
   const [authText, setAuthText] = useState(initialAuth ?? "");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
-  const [modelsText, setModelsText] = useState("");
+  const [models, setModels] = useState<string[]>([]);
+  const [newModel, setNewModel] = useState("");
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelsMessage, setModelsMessage] = useState("");
   const [preview, setPreview] = useState<AuthPreview | null>(null);
   const [loading, setLoading] = useState(mode === "edit");
   const [saving, setSaving] = useState(false);
@@ -62,7 +65,7 @@ export function AddAccountDialog({
           setApiKey("");
         }
         setBaseUrl(cred.base_url ?? "");
-        setModelsText(cred.models.join("\n"));
+        setModels(cred.models);
       } catch (e) {
         onError(errorText(e));
       } finally {
@@ -127,6 +130,44 @@ export function AddAccountDialog({
     }
   }
 
+  function addModel() {
+    const value = newModel.trim();
+    if (!value) return;
+    if (!models.some((model) => model.trim() === value)) {
+      setModels((current) => [...current, value]);
+    }
+    setNewModel("");
+    setModelsMessage("");
+  }
+
+  async function fetchModels() {
+    if (!baseUrl.trim()) {
+      onError("请先填写第三方服务的 Base URL");
+      return;
+    }
+    if (!apiKey.trim()) {
+      onError("请先填写 API Key");
+      return;
+    }
+    setFetchingModels(true);
+    setModelsMessage("");
+    try {
+      const fetched = await api.fetchProviderModels(baseUrl.trim(), apiKey.trim());
+      setModels((current) => {
+        const currentDefault = normalizeModels(current)[0];
+        return currentDefault && fetched.includes(currentDefault)
+          ? [currentDefault, ...fetched.filter((model) => model !== currentDefault)]
+          : fetched;
+      });
+      setNewModel("");
+      setModelsMessage(`已获取 ${fetched.length} 个模型`);
+    } catch (e) {
+      onError(errorText(e));
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
   async function save() {
     const trimmedAuth =
       kind === "third_party"
@@ -149,12 +190,12 @@ export function AddAccountDialog({
       return;
     }
 
-    const models = parseModels(modelsText);
+    const normalizedModels = normalizeModels(models);
     if (kind === "third_party" && !baseUrl.trim()) {
       onError("请填写第三方服务的 Base URL");
       return;
     }
-    if (kind === "third_party" && models.length === 0) {
+    if (kind === "third_party" && normalizedModels.length === 0) {
       onError("请至少填写一个模型");
       return;
     }
@@ -165,7 +206,7 @@ export function AddAccountDialog({
         const updated = await api.updateAccountCredentials(account.id, {
           auth: trimmedAuth,
           base_url: kind === "third_party" ? baseUrl.trim() : null,
-          models: kind === "third_party" ? models : [],
+          models: kind === "third_party" ? normalizedModels : [],
           name: name.trim() || null,
         });
         onSaved(updated.name, updated.id);
@@ -175,7 +216,7 @@ export function AddAccountDialog({
           kind,
           auth: trimmedAuth,
           base_url: kind === "third_party" ? baseUrl.trim() : null,
-          models: kind === "third_party" ? models : [],
+          models: kind === "third_party" ? normalizedModels : [],
           source: pickedPath ? `file:${pickedPath}` : "manual",
         });
         onSaved(created.name, created.id);
@@ -193,10 +234,10 @@ export function AddAccountDialog({
     return preview.kind === "official" ? "官方账号" : "第三方账号";
   }, [preview]);
 
-  const models = parseModels(modelsText);
+  const normalizedModels = normalizeModels(models);
   const kindMatches = !!kind && preview?.kind === kind;
   const thirdPartyReady =
-    kind !== "third_party" || (baseUrl.trim().length > 0 && models.length > 0);
+    kind !== "third_party" || (baseUrl.trim().length > 0 && normalizedModels.length > 0);
   const credentialReady =
     kind === "third_party" ? apiKey.trim().length > 0 : authText.trim().length > 0;
   const canSave =
@@ -339,16 +380,94 @@ export function AddAccountDialog({
                   </div>
 
                   <div className="field">
-                    <label>模型列表</label>
-                    <textarea
-                      className="code-area model-list-area"
-                      spellCheck={false}
-                      value={modelsText}
-                      placeholder={"每行一个模型，例如：\ngpt-5.4\ngpt-5.3-codex"}
-                      onChange={(e) => setModelsText(e.target.value)}
-                    />
+                    <div className="field-row">
+                      <label>模型列表</label>
+                      <div className="mini-actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          disabled={fetchingModels || !baseUrl.trim() || !apiKey.trim()}
+                          onClick={() => void fetchModels()}
+                        >
+                          {fetchingModels ? "获取中…" : "获取模型列表"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="model-editor">
+                      {models.length > 0 ? (
+                        <div className="model-items">
+                          {models.map((model, index) => (
+                            <div className="model-item" key={index}>
+                              <span className={index === 0 ? "model-index default" : "model-index"}>
+                                {index === 0 ? "默认" : index + 1}
+                              </span>
+                              <input
+                                value={model}
+                                spellCheck={false}
+                                aria-label={`模型 ${index + 1}`}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setModels((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index ? value : item,
+                                    ),
+                                  );
+                                  setModelsMessage("");
+                                }}
+                              />
+                              {index > 0 && (
+                                <button
+                                  type="button"
+                                  className="ghost model-default"
+                                  onClick={() => {
+                                    setModels((current) => [
+                                      current[index],
+                                      ...current.filter((_, itemIndex) => itemIndex !== index),
+                                    ]);
+                                    setModelsMessage("");
+                                  }}
+                                >
+                                  设默认
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                className="ghost model-remove"
+                                onClick={() => {
+                                  setModels((current) =>
+                                    current.filter((_, itemIndex) => itemIndex !== index),
+                                  );
+                                  setModelsMessage("");
+                                }}
+                              >
+                                删除
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="model-empty">还没有模型，请手动添加或从服务获取。</p>
+                      )}
+                      <div className="model-add-row">
+                        <input
+                          value={newModel}
+                          spellCheck={false}
+                          placeholder="输入模型名称，例如 gpt-5.4"
+                          onChange={(event) => setNewModel(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault();
+                              addModel();
+                            }
+                          }}
+                        />
+                        <button type="button" onClick={addModel} disabled={!newModel.trim()}>
+                          添加
+                        </button>
+                      </div>
+                    </div>
                     <p className="hint">
-                      第一项作为默认模型；也支持用逗号分隔。项目和会话记录仍由所有账号共用。
+                      {modelsMessage || "第一项作为默认模型。项目和会话记录仍由所有账号共用。"}
                     </p>
                   </div>
                 </>

@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    codex_helper_lib::run()
+    codex_hub_lib::run()
 }

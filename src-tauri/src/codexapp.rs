@@ -29,13 +29,15 @@
 //!    —— 你自己在终端里敲的那个 `codex` 也在这条规则里，一并关掉，
 //!    免得还有别的会话握着旧账号。
 //!
-//! 本工具发布后叫 `CodexHelper.exe`（开发构建为 `codex-helper.exe`），
+//! 本工具发布后叫 `Codex Hub.exe`（开发构建为 `codex-hub.exe`），
 //! 不在名单里，并且始终按 PID 排除自身，不会自杀。
 
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::time::{Duration, Instant};
 
 /// Codex 的命令行工具镜像名（这些进程的 exe 在
@@ -150,6 +152,8 @@ pub fn kill_all(procs: &[ProcInfo]) -> Result<usize, String> {
 
     // 一次性把 PID 全传进去，少起几个进程
     let mut cmd = Command::new("taskkill");
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     cmd.arg("/F");
     for p in procs {
         cmd.arg("/PID").arg(p.pid.to_string());
@@ -255,8 +259,10 @@ pub fn restart(hint: Option<&Path>) -> Result<String, String> {
 
     // 走 shell:AppsFolder 启动，这样应用能拿到正常的包身份。
     // explorer.exe 启动成功也会返回非零退出码，所以只看能不能起来，不看退出码。
-    Command::new("explorer.exe")
-        .arg(format!(r"shell:AppsFolder\{aumid}"))
+    let mut cmd = Command::new("explorer.exe");
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd.arg(format!(r"shell:AppsFolder\{aumid}"))
         .spawn()
         .map_err(|e| format!("拉起 Codex 失败：{e}"))?;
 
@@ -289,7 +295,7 @@ mod tests {
         assert!(!is_codex_app_path(&other));
 
         // 我们的管家自己不能被算进去
-        let helper = PathBuf::from(r"D:\Workspace\CodexHelper\src-tauri\target\debug\codex-helper.exe");
+        let helper = PathBuf::from(r"target\debug\codex-hub.exe");
         assert!(!is_codex_app_path(&helper));
     }
 

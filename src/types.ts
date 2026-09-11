@@ -44,7 +44,8 @@ export interface Settings {
   notify_on_limit: boolean;
   notify_on_reset: boolean;
   minimize_to_tray: boolean;
-  sync_ccswitch: boolean;
+  /** 主窗口隐藏后的常驻入口 */
+  status_mode: "tray" | "taskbar";
   /** 刷新时发现 5 小时窗口从未启动，就自动发一条会话把它点着 */
   warmup_auto: boolean;
 }
@@ -53,7 +54,6 @@ export interface SwitchOutcome {
   ok: boolean;
   message: string;
   backup_path?: string | null;
-  ccswitch_synced: boolean;
   /** 是否顺带改写了 config.toml（该账号带了配置片段） */
   config_applied: boolean;
   /** config.toml 的备份路径 */
@@ -85,18 +85,10 @@ export interface CodexAppStatus {
   procs: CodexAppProc[];
 }
 
-export interface ImportOutcome {
-  imported: number;
-  skipped: number;
-  message: string;
-}
-
 export interface Paths {
   data_dir: string;
   codex_home: string;
   auth_path: string;
-  ccswitch_db: string;
-  ccswitch_available: boolean;
 }
 
 // ---------------------------------------------------------------- 手动添加 / 编辑账号

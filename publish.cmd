@@ -1,10 +1,10 @@
 @echo off
 chcp 65001 >nul
 rem ============================================================
-rem  CodexHelper —— 构建 release EXE
+rem  Codex Hub —— 构建 release EXE
 rem
 rem  产物：
-rem    release\CodexHelper.exe
+rem    release\Codex Hub.exe
 rem
 rem  release 开了 LTO，构建大约 10-15 分钟。
 rem ============================================================
@@ -12,13 +12,10 @@ setlocal
 cd /d "%~dp0"
 
 where npm >nul 2>nul
-if not errorlevel 1 goto havenpm
+if errorlevel 1 goto nonpm
 
-rem 系统 PATH 里没有 npm，退回本机托管的 Node
-set "NODE_DIR=C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-2"
-if not exist "%NODE_DIR%\npm.cmd" goto nonpm
-set "PATH=%NODE_DIR%;%PATH%"
-echo [publish] 系统未找到 npm，已临时使用托管 Node：%NODE_DIR%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tools\prepare-build.ps1"
+if errorlevel 1 goto failed
 
 :havenpm
 if exist "node_modules" goto havenv
@@ -34,27 +31,25 @@ echo.
 call npx tauri build --no-bundle
 if errorlevel 1 goto failed
 
-rem 构建成功后再刷新发布目录，避免构建失败时删除上一次的可用产物
-if exist "release" rmdir /s /q "release"
-if errorlevel 1 goto copyfailed
-mkdir "release"
+rem 构建成功后更新发布文件
+if not exist "release" mkdir "release"
 if errorlevel 1 goto copyfailed
 
-copy /y "src-tauri\target\release\codex-helper.exe" "release\CodexHelper.exe" >nul
+copy /y "src-tauri\target\release\codex-hub.exe" "release\Codex Hub.exe" >nul
 if errorlevel 1 goto copyfailed
 
 echo.
 echo [publish] 构建完成。
 echo.
 echo   发布目录： release\
-echo     CodexHelper.exe
+echo     Codex Hub.exe
 echo.
 pause
 exit /b 0
 
 :nonpm
 echo.
-echo [publish] 找不到 npm。请先安装 Node.js，或修改本脚本里的 NODE_DIR。
+echo [publish] 找不到 npm。请先安装 Node.js 并将 npm 加入 PATH。
 pause
 exit /b 1
 

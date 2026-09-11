@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 rem ============================================================
-rem  CodexHelper —— debug 模式运行（开发 / 验收用）
+rem  Codex Hub —— debug 模式运行（开发 / 验收用）
 rem
 rem  会做四件事：
 rem    1. 确认能找到 npm
@@ -16,13 +16,10 @@ setlocal
 cd /d "%~dp0"
 
 where npm >nul 2>nul
-if not errorlevel 1 goto havenpm
+if errorlevel 1 goto nonpm
 
-rem 系统 PATH 里没有 npm，退回本机托管的 Node
-set "NODE_DIR=C:\Users\Administrator\.workbuddy\binaries\node\versions\22.22.2-2"
-if not exist "%NODE_DIR%\npm.cmd" goto nonpm
-set "PATH=%NODE_DIR%;%PATH%"
-echo [run] 系统未找到 npm，已临时使用托管 Node：%NODE_DIR%
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\tools\prepare-build.ps1"
+if errorlevel 1 goto failed
 
 :havenpm
 if exist "node_modules" goto havenv
@@ -35,7 +32,7 @@ if errorlevel 1 goto failed
 call :killstale
 
 echo.
-echo [run] 以 debug 模式启动 CodexHelper
+echo [run] 以 debug 模式启动 Codex Hub
 echo       首次 Rust 编译需要几分钟，请耐心等待
 echo       关掉本窗口或按 Ctrl+C 结束
 echo.
@@ -46,13 +43,13 @@ goto end
 
 rem ------------------------------------------------------------
 rem  清理上一次没退干净的进程：
-rem    - codex-helper.exe / CodexHelper.exe：上一次的应用实例
+rem    - codex-hub.exe / Codex Hub.exe：上一次的应用实例
 rem    - 占用 1420 端口的进程：上一次 Vite dev server
 rem  只针对这两个，不动别的 node 进程。
 rem ------------------------------------------------------------
 :killstale
-taskkill /F /IM codex-helper.exe >nul 2>nul
-taskkill /F /IM CodexHelper.exe >nul 2>nul
+taskkill /F /IM codex-hub.exe >nul 2>nul
+taskkill /F /IM "Codex Hub.exe" >nul 2>nul
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":1420 " ^| findstr "LISTENING"') do (
     taskkill /F /PID %%p >nul 2>nul
 )
@@ -61,13 +58,13 @@ exit /b 0
 
 :nonpm
 echo.
-echo [run] 找不到 npm。请先安装 Node.js，或修改本脚本里的 NODE_DIR。
+echo [run] 找不到 npm。请先安装 Node.js 并将 npm 加入 PATH。
 pause
 exit /b 1
 
 :failed
 echo.
-echo [run] 前端依赖安装失败，请看上面的错误信息。
+echo [run] 构建准备或依赖安装失败，请看上面的错误信息。
 pause
 exit /b 1
 

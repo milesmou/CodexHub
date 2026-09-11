@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "CodexHelper 默认权限",
-  "windows": ["main"],
+  "description": "Codex Hub 默认权限",
+  "windows": ["main", "taskbar-status"],
   "permissions": [
     "core:default",
     "core:window:allow-show",
@@ -10,6 +10,10 @@
     "core:window:allow-set-focus",
     "core:window:allow-close",
     "core:window:allow-minimize",
+    "core:window:allow-unminimize",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
+    "core:window:allow-set-always-on-top",
     "core:event:default",
     "opener:default",
     "notification:default",

@@ -11,6 +11,7 @@ use crate::model::{Account, AccountKind};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 
 /// 前端提交的新账号表单。
 #[derive(Debug, Deserialize)]
@@ -202,6 +203,66 @@ pub fn normalize_models(values: &[String]) -> Result<Vec<String>> {
     Ok(models)
 }
 
+/// 从 OpenAI 兼容服务的 `/models` 接口读取可用模型。
+pub async fn fetch_provider_models(base_url: &str, api_key: &str) -> Result<Vec<String>> {
+    let base_url = normalize_base_url(Some(base_url))?;
+    let api_key = api_key.trim();
+    if api_key.is_empty() {
+        return Err(anyhow!("请先填写 API Key"));
+    }
+
+    let url = if base_url.ends_with("/models") {
+        base_url
+    } else {
+        format!("{base_url}/models")
+    };
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(25))
+        .user_agent("codex-hub/0.1.0")
+        .build()
+        .context("创建网络请求失败")?
+        .get(&url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .with_context(|| format!("无法访问模型接口：{url}"))?;
+
+    let status = response.status();
+    let body = response.text().await.context("读取模型接口响应失败")?;
+    if !status.is_success() {
+        let message = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/error/message")
+                    .or_else(|| value.get("message"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| body.chars().take(240).collect());
+        return Err(anyhow!("获取模型列表失败（HTTP {status}）：{message}"));
+    }
+
+    let value: Value = serde_json::from_str(&body).context("模型接口返回的不是有效 JSON")?;
+    let entries = value
+        .get("data")
+        .or_else(|| value.get("models"))
+        .and_then(Value::as_array)
+        .or_else(|| value.as_array())
+        .ok_or_else(|| anyhow!("模型接口响应中没有 data 或 models 列表"))?;
+    let values: Vec<String> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .as_str()
+                .or_else(|| entry.get("id").and_then(Value::as_str))
+                .or_else(|| entry.get("name").and_then(Value::as_str))
+                .map(str::to_string)
+        })
+        .collect();
+    normalize_models(&values).map_err(|_| anyhow!("模型接口没有返回任何有效模型"))
+}
+
 /// 由表单构造一条账号记录。
 pub fn build_account(
     payload: &NewAccountPayload,
@@ -252,7 +313,6 @@ pub fn build_account(
         base_url,
         models,
         source: Some(payload.source.clone().unwrap_or_else(|| "manual".to_string())),
-        cc_id: None,
         sort_index,
         hidden: false,
         created_at: chrono::Utc::now().to_rfc3339(),

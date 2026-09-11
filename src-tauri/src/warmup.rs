@@ -154,7 +154,7 @@ pub async fn warmup(auth: &serde_json::Value) -> Result<String> {
 
     // 里面是明文凭证，无论成败都得清掉
     if let Err(e) = std::fs::remove_dir_all(&home) {
-        eprintln!("[codex-helper] 清理临时目录失败 {}：{e}", home.display());
+        eprintln!("[codex-hub] 清理临时目录失败 {}：{e}", home.display());
     }
 
     result
@@ -169,6 +169,8 @@ async fn run_isolated(cli: &Path, home: &Path, auth: &serde_json::Value) -> Resu
         .context("写入临时 config.toml 失败")?;
 
     let mut cmd = tokio::process::Command::new(cli);
+    #[cfg(windows)]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     cmd.arg("exec")
         .arg("--skip-git-repo-check") // 临时目录不是 git 仓库
         .arg("--ephemeral") // 不落会话文件

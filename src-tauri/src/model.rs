@@ -37,13 +37,9 @@ pub struct Account {
     /// 第三方服务提供的模型列表；第一项作为默认模型
     #[serde(default)]
     pub models: Vec<String>,
-    /// 来源标记：cc-switch / current / manual
+    /// 来源标记：current / manual / 历史来源
     #[serde(default)]
     pub source: Option<String>,
-    /// 如果是从 cc-switch 导入的，记下它在 cc-switch 里的 Provider id，
-    /// 这样切换账号时可以把 cc-switch 的 is_current 一起改掉，避免两边状态打架。
-    #[serde(default)]
-    pub cc_id: Option<String>,
     #[serde(default)]
     pub sort_index: i32,
     #[serde(default)]
@@ -135,6 +131,15 @@ pub struct AccountView {
     pub source: Option<String>,
 }
 
+/// 主窗口隐藏后使用哪种常驻入口。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusMode {
+    #[default]
+    Tray,
+    Taskbar,
+}
+
 /// 定时刷新与行为相关的设置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -150,8 +155,9 @@ pub struct Settings {
     pub notify_on_reset: bool,
     /// 关闭窗口时最小化到托盘而不是退出
     pub minimize_to_tray: bool,
-    /// 切换账号时同步更新 cc-switch 的当前 Provider，避免两边状态不一致
-    pub sync_ccswitch: bool,
+    /// 常驻入口：系统托盘图标，或任务栏文字浮层。
+    #[serde(default)]
+    pub status_mode: StatusMode,
     /// 自动激活：刷新时发现某账号的 5 小时窗口从未启动，就替它发一条会话把窗口点着。
     /// 默认关闭 —— 这会在用户没操作时主动发请求，得让用户自己点头。
     #[serde(default)]
@@ -167,7 +173,7 @@ impl Default for Settings {
             notify_on_limit: true,
             notify_on_reset: true,
             minimize_to_tray: true,
-            sync_ccswitch: true,
+            status_mode: StatusMode::Tray,
             warmup_auto: false,
         }
     }

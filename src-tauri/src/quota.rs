@@ -42,7 +42,7 @@ fn now_secs() -> i64 {
 fn build_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(25))
-        .user_agent("codex-helper/0.1.0")
+        .user_agent("codex-hub/0.1.0")
         .build()
         .context("构造 HTTP 客户端失败")
 }

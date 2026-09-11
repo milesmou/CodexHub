@@ -1229,3 +1229,148 @@ select:focus {
   font-size: 10px;
   color: var(--text-dim);
 }
+
+/* ---------------------------------------------------- 新增功能的原风格兼容 */
+
+body.taskbar-body {
+  background: transparent;
+}
+
+.taskbar-status {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 7px;
+  background: rgba(28, 28, 32, 0.94);
+  color: #ececf1;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  backdrop-filter: blur(12px);
+}
+
+.taskbar-status.compact-status {
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+.taskbar-status.compact-status:hover {
+  background: rgba(28, 28, 32, 0.94);
+  border-color: rgba(154, 145, 240, 0.58);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.38);
+  backdrop-filter: blur(12px);
+}
+
+.taskbar-status:hover {
+  background: rgba(48, 48, 54, 0.97);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.taskbar-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.taskbar-status.healthy .taskbar-dot { background: var(--ok); }
+.taskbar-status.warning .taskbar-dot { background: var(--warn); }
+.taskbar-status.danger .taskbar-dot { background: var(--danger); }
+
+.taskbar-dot.pulse {
+  background: var(--accent);
+  animation: taskbar-pulse 0.8s ease-in-out infinite alternate;
+}
+
+.taskbar-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@keyframes taskbar-pulse { to { opacity: 0.35; } }
+
+.card-request-spinner {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.card-request-spinner::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(154, 145, 240, 0.28);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.model-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.model-items {
+  display: flex;
+  max-height: 190px;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.model-item,
+.model-add-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.model-item input,
+.model-add-row input {
+  min-width: 0;
+  flex: 1;
+  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
+}
+
+.model-index {
+  width: 34px;
+  flex: 0 0 34px;
+  color: var(--text-faint);
+  font-size: 10px;
+  text-align: center;
+}
+
+.model-index.default { color: var(--accent); }
+.model-remove { padding: 5px 8px; }
+.model-default { padding: 5px 8px; color: var(--accent); }
+
+.model-add-row {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.model-add-row button { flex: 0 0 auto; }
+
+.model-empty {
+  margin: 2px 4px;
+  color: var(--text-faint);
+  font-size: 11px;
+}

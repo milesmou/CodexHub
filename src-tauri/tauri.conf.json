@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "CodexHelper",
+  "productName": "Codex Hub",
   "version": "0.1.0",
   "identifier": "com.codexhelper.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "CodexHelper",
+        "title": "Codex Hub",
         "width": 1060,
         "height": 780,
         "minWidth": 880,
@@ -23,6 +23,20 @@
         "theme": "Dark",
         "backgroundColor": "#16161a",
         "visible": true
+      },
+      {
+        "label": "taskbar-status",
+        "title": "Codex Hub 状态",
+        "width": 232,
+        "height": 34,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "focus": false,
+        "visible": false
       }
     ],
     "security": {

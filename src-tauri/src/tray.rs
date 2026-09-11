@@ -5,10 +5,10 @@ use crate::codexapp;
 use crate::model::{Account, AccountKind, Quota, Vault};
 use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Wry};
 
 /// 托盘图标 id，重建菜单时靠它找回托盘实例。
-pub const TRAY_ID: &str = "codex-helper-tray";
+pub const TRAY_ID: &str = "codex-hub-tray";
 
 /// 把「已用百分比」换算成「剩余百分比」文案。
 ///
@@ -42,7 +42,7 @@ fn account_line(account: &Account, quota: Option<&Quota>, is_current: bool) -> S
 
 /// 悬停提示：显示当前账号和它的额度（同样是剩余）。
 fn tooltip(vault: &Vault) -> String {
-    let base = "CodexHelper";
+    let base = "Codex Hub";
     let Some(cur) = vault
         .current_id
         .as_deref()
@@ -106,7 +106,6 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .tooltip(tip)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(handle_menu_event)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -140,8 +139,26 @@ pub fn rebuild(app: &AppHandle, vault: &Vault) {
     let _ = tray.set_tooltip(Some(tooltip(vault)));
 }
 
+/// 在任务栏状态浮层上弹出与托盘图标相同的原生右键菜单。
+/// 浮层的 Windows 原生置顶守护会处理菜单关闭后的任务栏层级变化。
+pub fn popup_status_menu(app: &AppHandle, cursor_x: f64) -> Result<(), String> {
+    let menu = {
+        let state = app.state::<AppState>();
+        let vault = state.vault.lock().unwrap();
+        build_menu(app, &vault).map_err(|e| e.to_string())?
+    };
+    let window = app
+        .get_webview_window("taskbar-status")
+        .ok_or_else(|| "任务栏状态窗口不存在".to_string())?;
+    // 浮层位于任务栏内部；把锚点设在状态条顶部再上移一点，
+    // 避免菜单底部被任务栏盖住，同时保留用户点击的横向位置。
+    window
+        .popup_menu_at(&menu, LogicalPosition::new(cursor_x, -8.0))
+        .map_err(|e| e.to_string())
+}
+
 /// 托盘菜单点击。
-fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
+pub fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
     let id = event.id().as_ref().to_string();
 
     match id.as_str() {
@@ -171,7 +188,7 @@ fn handle_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 /// 托盘发起的切换：先弹原生确认框，确认后再关 Codex → 切账号 → 重开 Codex。
-async fn switch_from_tray(app: AppHandle, account_id: String) {
+pub async fn switch_from_tray(app: AppHandle, account_id: String) {
     let name = {
         let state = app.state::<AppState>();
         let vault = state.vault.lock().unwrap();
@@ -194,16 +211,16 @@ async fn switch_from_tray(app: AppHandle, account_id: String) {
 
     match result {
         Ok(Ok(outcome)) => {
-            eprintln!("[codex-helper] {}", outcome.message);
+            eprintln!("[codex-hub] {}", outcome.message);
             // persist() 已经发过 accounts-changed，主窗口开着的话会自己刷新
             let _ = app.emit("toast", outcome.message);
         }
         Ok(Err(e)) => {
-            eprintln!("[codex-helper] 切换失败：{e}");
+            eprintln!("[codex-hub] 切换失败：{e}");
             let _ = app.emit("toast", format!("切换失败：{e}"));
         }
         Err(e) => {
-            eprintln!("[codex-helper] 切换任务异常：{e}");
+            eprintln!("[codex-hub] 切换任务异常：{e}");
             let _ = app.emit("toast", format!("切换任务异常：{e}"));
         }
     }
@@ -220,7 +237,7 @@ async fn confirm_switch(app: &AppHandle, name: &str) -> bool {
     let count = match tauri::async_runtime::spawn_blocking(codexapp::status).await {
         Ok(s) => s.count,
         Err(e) => {
-            eprintln!("[codex-helper] 查询 Codex 进程失败：{e}");
+            eprintln!("[codex-hub] 查询 Codex 进程失败：{e}");
             0
         }
     };

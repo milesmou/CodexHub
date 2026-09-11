@@ -143,7 +143,7 @@ fn merge_table(dst: &mut toml_edit::Table, src: &toml_edit::Table) {
     }
 }
 
-/// CodexHelper 为当前第三方账号生成的模型目录。
+/// Codex Hub 为当前第三方账号生成的模型目录。
 pub fn model_catalog_path() -> PathBuf {
     codex_home().join("codex-helper-model-catalog.json")
 }
@@ -201,14 +201,14 @@ pub fn write_model_catalog(models: &[String]) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// 生成 CodexHelper 托管的第三方服务配置。
+/// 生成 Codex Hub 托管的第三方服务配置。
 pub fn managed_third_party_config(base_url: &str, models: &[String]) -> String {
     let mut doc = toml_edit::DocumentMut::new();
     doc["model"] = toml_edit::value(&models[0]);
     doc["model_provider"] = toml_edit::value(MANAGED_PROVIDER_ID);
     doc["model_catalog_json"] =
         toml_edit::value(model_catalog_path().to_string_lossy().to_string());
-    doc["model_providers"][MANAGED_PROVIDER_ID]["name"] = toml_edit::value("CodexHelper");
+    doc["model_providers"][MANAGED_PROVIDER_ID]["name"] = toml_edit::value("Codex Hub");
     doc["model_providers"][MANAGED_PROVIDER_ID]["base_url"] = toml_edit::value(base_url);
     doc["model_providers"][MANAGED_PROVIDER_ID]["wire_api"] = toml_edit::value("responses");
     doc["model_providers"][MANAGED_PROVIDER_ID]["requires_openai_auth"] =
@@ -216,7 +216,7 @@ pub fn managed_third_party_config(base_url: &str, models: &[String]) -> String {
     doc.to_string()
 }
 
-/// 移除上一个第三方账号由 CodexHelper 托管的配置，保留项目、会话和用户其他设置。
+/// 移除上一个第三方账号由 Codex Hub 托管的配置，保留项目、会话和用户其他设置。
 pub fn clear_managed_third_party_config(current: &str) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = current
         .parse()

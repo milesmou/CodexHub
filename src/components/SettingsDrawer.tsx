@@ -107,13 +107,27 @@ export function SettingsDrawer({
 
           <div className="field">
             <label>行为</label>
+            <label>后台常驻方式</label>
+            <select
+              style={{ width: "100%", marginBottom: 8 }}
+              value={draft.status_mode}
+              onChange={(e) =>
+                patch("status_mode", e.target.value as Settings["status_mode"])
+              }
+            >
+              <option value="tray">系统托盘图标</option>
+              <option value="taskbar">任务栏状态浮层</option>
+            </select>
+            <p className="hint">
+              状态浮层会在主窗口最小化或关闭后出现，右键菜单与托盘图标一致。
+            </p>
             <label className="checkbox">
               <input
                 type="checkbox"
                 checked={draft.minimize_to_tray}
                 onChange={(e) => patch("minimize_to_tray", e.target.checked)}
               />
-              关闭窗口时最小化到托盘，不退出
+              关闭主窗口时驻留后台，不退出
             </label>
             <label className="checkbox">
               <input
@@ -122,14 +136,6 @@ export function SettingsDrawer({
                 onChange={(e) => patch("startup", e.target.checked)}
               />
               开机自动启动
-            </label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.sync_ccswitch}
-                onChange={(e) => patch("sync_ccswitch", e.target.checked)}
-              />
-              切换账号时同步更新 cc-switch 的当前 Provider
             </label>
             <label className="checkbox">
               <input
@@ -179,13 +185,6 @@ export function SettingsDrawer({
                 <b>Codex 登录态</b>
                 <br />
                 {paths?.auth_path ?? "—"}
-              </div>
-              <div style={{ marginTop: 6 }}>
-                <b>cc-switch 数据库</b>
-                <br />
-                {paths?.ccswitch_available
-                  ? paths.ccswitch_db
-                  : "未检测到 cc-switch"}
               </div>
               <div style={{ marginTop: 6 }}>
                 <b>codex CLI</b>

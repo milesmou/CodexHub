@@ -7,7 +7,6 @@ import type {
   AuthPreview,
   CodexAppStatus,
   EditAccountPayload,
-  ImportOutcome,
   NewAccountPayload,
   Paths,
   PickedFile,
@@ -24,13 +23,15 @@ export const api = {
   refreshQuotas: (ids?: string[]) =>
     invoke<AccountView[]>("refresh_quotas", { ids: ids ?? null }),
 
+  /** 页面启动时同步已经由后台发起的额度查询 */
+  refreshActiveIds: () => invoke<string[]>("refresh_active_ids"),
+
   switchAccount: (id: string, restartCodex = true) =>
     invoke<SwitchOutcome>("switch_account", { id, restartCodex }),
 
   /** 查一下切换时会被关掉哪些 Codex 进程（只读，不动进程） */
   codexAppStatus: () => invoke<CodexAppStatus>("codex_app_status"),
 
-  importFromCcSwitch: () => invoke<ImportOutcome>("import_from_ccswitch"),
 
   deleteAccount: (id: string) => invoke<void>("delete_account", { id }),
 
@@ -41,6 +42,12 @@ export const api = {
 
   getSettings: () => invoke<Settings>("get_settings"),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  popupStatusMenu: (cursorX: number) =>
+    invoke<void>("popup_status_menu", { cursorX }),
+  taskbarStatusAnchor: () =>
+    invoke<{ x: number; y: number; width: number; height: number } | null>(
+      "taskbar_status_anchor",
+    ),
 
   getPaths: () => invoke<Paths>("get_paths"),
   openDataDir: () => invoke<void>("open_data_dir"),
@@ -64,6 +71,10 @@ export const api = {
   readAccountCredentials: (id: string) =>
     invoke<AccountCredentials>("read_account_credentials", { id }),
 
+  /** 从第三方服务的 OpenAI 兼容接口获取模型列表 */
+  fetchProviderModels: (baseUrl: string, apiKey: string) =>
+    invoke<string[]>("fetch_provider_models", { baseUrl, apiKey }),
+
   createAccount: (payload: NewAccountPayload) =>
     invoke<AccountView>("create_account", { payload }),
 
@@ -77,6 +88,9 @@ export const api = {
 
   /** 一次性点着所有「窗口未启动」的账号（后端串行执行） */
   warmupAllDormant: () => invoke<WarmupOutcome[]>("warmup_all_dormant"),
+
+  /** 页面启动时同步已经由后台发起的激活请求 */
+  warmupActiveIds: () => invoke<string[]>("warmup_active_ids"),
 
   /** 查 codex CLI 路径，找不到返回 null */
   codexCliPath: () => invoke<string | null>("codex_cli_path"),

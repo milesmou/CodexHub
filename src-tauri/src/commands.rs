@@ -4,7 +4,7 @@
 //! 这样托盘菜单也能直接复用同一套逻辑，不用重复实现。
 
 use crate::model::*;
-use crate::{accounts, ccswitch, codex, codexapp, quota, stats, store, tray, warmup};
+use crate::{accounts, codex, codexapp, quota, stats, store, tray, warmup};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,15 +20,21 @@ const WARMUP_COOLDOWN_SECS: i64 = 1800;
 /// 全局共享状态：加密账号库。
 pub struct AppState {
     pub vault: Mutex<Vault>,
+    /// 正在查询额度的账号及并发请求计数，供页面启动时恢复卡片状态。
+    pub refresh_active: Mutex<HashMap<String, usize>>,
     /// 账号 id -> 上次自动激活的时刻（unix 秒），用于冷却
     pub warmup_cooldown: Mutex<HashMap<String, i64>>,
+    /// 当前正在发送 5 小时窗口激活请求的账号；所有入口共用这一把全局锁。
+    pub warmup_active: Mutex<Option<String>>,
 }
 
 impl AppState {
     pub fn new(vault: Vault) -> Self {
         Self {
             vault: Mutex::new(vault),
+            refresh_active: Mutex::new(HashMap::new()),
             warmup_cooldown: Mutex::new(HashMap::new()),
+            warmup_active: Mutex::new(None),
         }
     }
 }
@@ -40,8 +46,6 @@ pub struct SwitchOutcome {
     pub message: String,
     /// 切换前的 auth.json 备份路径
     pub backup_path: Option<String>,
-    /// cc-switch 状态是否同步成功
-    pub ccswitch_synced: bool,
     /// 是否顺带改写了 config.toml（该账号带了配置片段）
     pub config_applied: bool,
     /// config.toml 的备份路径
@@ -52,14 +56,6 @@ pub struct SwitchOutcome {
     pub codex_restarted: bool,
     /// 重新拉起失败时的原因（切换本身已成功，所以不当作错误上报）
     pub codex_restart_error: Option<String>,
-}
-
-/// 导入结果。
-#[derive(Debug, Serialize)]
-pub struct ImportOutcome {
-    pub imported: usize,
-    pub skipped: usize,
-    pub message: String,
 }
 
 // ---------------------------------------------------------------- 内部工具
@@ -143,7 +139,15 @@ pub async fn refresh_quotas_inner(
             .collect()
     });
 
-    let _ = app.emit("refresh-started", ());
+    let target_ids: Vec<String> = targets.iter().map(|(id, _)| id.clone()).collect();
+    {
+        let state = app.state::<AppState>();
+        let mut active = state.refresh_active.lock().unwrap();
+        for id in &target_ids {
+            *active.entry(id.clone()).or_default() += 1;
+        }
+    }
+    let _ = app.emit("refresh-started", &target_ids);
 
     // 2. 并发查询，某一家慢或挂掉不影响其他账号
     let mut handles = Vec::with_capacity(targets.len());
@@ -185,15 +189,31 @@ pub async fn refresh_quotas_inner(
                 }
             }
         }
-        persist(app, &vault)?;
-        to_views(&vault)
+        persist(app, &vault).map(|_| to_views(&vault))
     };
 
-    let _ = app.emit("refresh-finished", ());
+    // 即使落盘失败也必须结束前端 loading，避免卡片永久转圈。
+    {
+        let state = app.state::<AppState>();
+        let mut active = state.refresh_active.lock().unwrap();
+        for id in &target_ids {
+            if let Some(count) = active.get_mut(id) {
+                *count -= 1;
+                if *count == 0 {
+                    active.remove(id);
+                }
+            }
+        }
+    }
+    let _ = app.emit("refresh-finished", &target_ids);
+    let updated = updated?;
     crate::scheduler::check_and_notify(app, &results);
 
-    // 顺手把「从未启动」的 5 小时窗口点着（默认关闭，见设置里的开关）
-    maybe_auto_warmup(app);
+    // 只有全量刷新才触发自动激活。激活完成后的单账号复查不能再次启动任务，
+    // 否则会与正在串行执行的一键激活队列争抢运行槽。
+    if ids.is_none() {
+        maybe_auto_warmup(app);
+    }
 
     Ok(updated)
 }
@@ -212,12 +232,12 @@ fn maybe_auto_warmup(app: &AppHandle) {
         return;
     }
 
-    // 冷却过滤。时间戳要在 spawn **之前**就打上：
-    // 否则任务还在跑的时候又来了新一轮刷新，同一个账号会被重复点。
+    // 冷却过滤。真正占到统一运行槽时才更新时间戳；这样若恰好撞上
+    // 另一个手动任务而未发送请求，不会被错误地冷却 30 分钟。
     let now = chrono::Utc::now().timestamp();
     let due: Vec<String> = {
         let state = app.state::<AppState>();
-        let mut cd = state.warmup_cooldown.lock().unwrap();
+        let cd = state.warmup_cooldown.lock().unwrap();
         targets
             .into_iter()
             .filter(|id| {
@@ -225,7 +245,6 @@ fn maybe_auto_warmup(app: &AppHandle) {
                 if now - last < WARMUP_COOLDOWN_SECS {
                     false
                 } else {
-                    cd.insert(id.clone(), now);
                     true
                 }
             })
@@ -241,11 +260,10 @@ fn maybe_auto_warmup(app: &AppHandle) {
         // 串行执行：一次只起一个 CLI 进程，别把机器打满
         for id in due {
             match warmup_account_inner(&app_handle, &id).await {
-                Ok(o) => eprintln!("[codex-helper] 自动激活「{}」成功", o.name),
-                Err(e) => eprintln!("[codex-helper] 自动激活失败（{id}）：{e}"),
+                Ok(o) => eprintln!("[codex-hub] 自动激活「{}」成功", o.name),
+                Err(e) => eprintln!("[codex-hub] 自动激活失败（{id}）：{e}"),
             }
         }
-        let _ = app_handle.emit("warmup-finished", ());
     });
 }
 
@@ -264,15 +282,13 @@ pub fn switch_account_inner(
     id: &str,
     restart_codex: bool,
 ) -> Result<SwitchOutcome, String> {
-    let (auth, cc_id, name, sync_cc, kind, snippet, base_url, models) = snapshot(app, |vault| {
+    let (auth, name, kind, snippet, base_url, models) = snapshot(app, |vault| {
         vault
             .find(id)
             .map(|acc| {
                 (
                     acc.auth.clone(),
-                    acc.cc_id.clone(),
                     acc.name.clone(),
-                    vault.settings.sync_ccswitch,
                     acc.kind,
                     acc.config.clone(),
                     acc.base_url.clone(),
@@ -324,7 +340,7 @@ pub fn switch_account_inner(
                 None
             }
         } else {
-            // 兼容旧版和 cc-switch 导入的数据。
+            // 兼容旧版账号保存的配置片段。
             accounts::normalize_config_snippet(kind, snippet.as_deref())
                 .map_err(|e| format!("账号 config.toml 无效：{e}"))?
         }
@@ -345,14 +361,6 @@ pub fn switch_account_inner(
             .map_err(|e| format!("写入 config.toml 失败：{e}"))?;
     }
 
-    // 尽量让 cc-switch 的当前 Provider 跟我们对齐；失败不影响切换本身
-    let mut cc_synced = false;
-    if sync_cc {
-        if let Some(cc_id) = &cc_id {
-            cc_synced = ccswitch::set_current_provider(cc_id).is_ok();
-        }
-    }
-
     {
         let state = app.state::<AppState>();
         let mut vault = state.vault.lock().unwrap();
@@ -368,12 +376,12 @@ pub fn switch_account_inner(
         match codexapp::restart(app_exe.as_deref()) {
             Ok(aumid) => {
                 codex_restarted = true;
-                eprintln!("[codex-helper] Codex 已重新拉起（{aumid}）");
+                eprintln!("[codex-hub] Codex 已重新拉起（{aumid}）");
             }
             Err(e) => {
                 // 只有「重新打开」这一步失败：账号其实已经切好了，
                 // 所以不当成整体失败，只把原因带回去让界面提示一句
-                eprintln!("[codex-helper] 重新拉起 Codex 失败：{e}");
+                eprintln!("[codex-hub] 重新拉起 Codex 失败：{e}");
                 codex_restart_error = Some(e);
             }
         }
@@ -401,57 +409,11 @@ pub fn switch_account_inner(
         ok: true,
         message,
         backup_path,
-        ccswitch_synced: cc_synced,
         config_applied,
         config_backup_path,
         codex_killed,
         codex_restarted,
         codex_restart_error,
-    })
-}
-
-/// 从 cc-switch 导入的核心实现。
-pub fn import_from_ccswitch_inner(app: &AppHandle) -> Result<ImportOutcome, String> {
-    let providers = ccswitch::read_codex_providers().map_err(|e| format!("{e}"))?;
-
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-
-    {
-        let state = app.state::<AppState>();
-        let mut vault = state.vault.lock().unwrap();
-
-        for p in &providers {
-            if vault.contains_auth(&p.auth) {
-                skipped += 1;
-                continue;
-            }
-            let mut acc = ccswitch::to_account(p);
-            acc.sort_index = vault.accounts.len() as i32;
-            vault.accounts.push(acc);
-            imported += 1;
-        }
-
-        // 顺手把 cc-switch 里标记为「当前」的那个也设成当前
-        if imported > 0 {
-            if let Some(cur) = providers.iter().find(|p| p.is_current) {
-                if let Some(acc) = vault
-                    .accounts
-                    .iter()
-                    .find(|a| a.cc_id.as_deref() == Some(cur.id.as_str()))
-                {
-                    vault.current_id = Some(acc.id.clone());
-                }
-            }
-        }
-
-        persist(app, &vault)?;
-    }
-
-    Ok(ImportOutcome {
-        imported,
-        skipped,
-        message: format!("导入 {imported} 个，跳过重复 {skipped} 个"),
     })
 }
 
@@ -489,6 +451,18 @@ pub async fn refresh_quotas(
     refresh_quotas_inner(&app, ids).await
 }
 
+/// 返回当前正在查询额度的账号，供页面启动时同步已开始的后台刷新。
+#[tauri::command]
+pub fn refresh_active_ids(state: State<'_, AppState>) -> Vec<String> {
+    state
+        .refresh_active
+        .lock()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect()
+}
+
 /// 切换账号。
 ///
 /// `restart_codex` 为真（默认）时，会先关掉 Codex 再切、切完重新拉起来。
@@ -515,11 +489,6 @@ pub async fn codex_app_status() -> Result<codexapp::AppStatus, String> {
     tauri::async_runtime::spawn_blocking(codexapp::status)
         .await
         .map_err(|e| format!("查询 Codex 进程失败：{e}"))
-}
-
-#[tauri::command]
-pub fn import_from_ccswitch(app: AppHandle) -> Result<ImportOutcome, String> {
-    import_from_ccswitch_inner(&app)
 }
 
 #[tauri::command]
@@ -575,13 +544,56 @@ pub fn set_settings(app: AppHandle, settings: Settings) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn popup_status_menu(app: AppHandle, cursor_x: f64) -> Result<(), String> {
+    tray::popup_status_menu(&app, cursor_x)
+}
+
+/// Windows 主任务栏通知区域的物理屏幕坐标。悬浮球放在它左侧，正好避开
+/// “展开隐藏图标”按钮及后面的输入法、网络、音量、时钟等系统控件。
+#[tauri::command]
+pub fn taskbar_status_anchor() -> Option<serde_json::Value> {
+    #[cfg(windows)]
+    {
+        use std::ptr::null_mut;
+        use windows_sys::Win32::Foundation::RECT;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            FindWindowExW, FindWindowW, GetWindowRect,
+        };
+
+        let shell: Vec<u16> = "Shell_TrayWnd\0".encode_utf16().collect();
+        let notify: Vec<u16> = "TrayNotifyWnd\0".encode_utf16().collect();
+        unsafe {
+            let taskbar = FindWindowW(shell.as_ptr(), null_mut());
+            if taskbar.is_null() {
+                return None;
+            }
+            let tray = FindWindowExW(taskbar, null_mut(), notify.as_ptr(), null_mut());
+            if tray.is_null() {
+                return None;
+            }
+            let mut rect: RECT = std::mem::zeroed();
+            if GetWindowRect(tray, &mut rect) == 0 {
+                return None;
+            }
+            return Some(serde_json::json!({
+                "x": rect.left,
+                "y": rect.top,
+                "width": rect.right - rect.left,
+                "height": rect.bottom - rect.top,
+            }));
+        }
+    }
+
+    #[cfg(not(windows))]
+    None
+}
+
+#[tauri::command]
 pub fn get_paths() -> serde_json::Value {
     serde_json::json!({
         "data_dir": store::data_dir().display().to_string(),
         "codex_home": codex::codex_home().display().to_string(),
         "auth_path": codex::auth_path().display().to_string(),
-        "ccswitch_db": ccswitch::db_path().display().to_string(),
-        "ccswitch_available": ccswitch::db_path().exists(),
     })
 }
 
@@ -693,6 +705,17 @@ pub fn read_account_credentials(
         base_url: acc.base_url.clone(),
         models: acc.models.clone(),
     })
+}
+
+/// 使用第三方服务的 OpenAI 兼容接口获取模型列表。
+#[tauri::command]
+pub async fn fetch_provider_models(
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    accounts::fetch_provider_models(&base_url, &api_key)
+        .await
+        .map_err(|e| format!("{e}"))
 }
 
 /// 手动创建一个账号。
@@ -857,8 +880,36 @@ pub async fn warmup_account_inner(
         return Err("只有官方账号才有 5 小时额度窗口".to_string());
     }
 
-    // 2) 拉起 CLI。要十几秒，绝对不持锁
-    let tail = warmup::warmup(&auth).await.map_err(|e| format!("{e}"))?;
+    // 所有入口共用一个运行槽，保证任何时刻最多只发一个激活请求。
+    {
+        let state = app.state::<AppState>();
+        let mut active = state.warmup_active.lock().unwrap();
+        if let Some(active_id) = active.as_ref() {
+            return Err(format!("已有账号正在激活 5 小时窗口：{active_id}"));
+        }
+        *active = Some(id.to_string());
+
+        // 手动请求同样进入自动激活冷却，防止额度接口尚未更新时立刻重复发送。
+        state
+            .warmup_cooldown
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), chrono::Utc::now().timestamp());
+    }
+
+    // 2) 拉起 CLI。要十几秒，绝对不持锁。所有入口（自动、单个、批量）
+    // 都经过这里并广播同一套状态，前端据此统一锁住激活入口。
+    let _ = app.emit("warmup-started", id);
+    let result = warmup::warmup(&auth).await.map_err(|e| format!("{e}"));
+    {
+        let state = app.state::<AppState>();
+        let mut active = state.warmup_active.lock().unwrap();
+        if active.as_deref() == Some(id) {
+            *active = None;
+        }
+    }
+    let _ = app.emit("warmup-finished", id);
+    let tail = result?;
 
     Ok(warmup::WarmupOutcome {
         ok: true,
@@ -884,17 +935,6 @@ pub async fn warmup_all_dormant_inner(
 
     if targets.is_empty() {
         return Ok(Vec::new());
-    }
-
-    // 手动点过也算数，同样记进冷却，
-    // 免得刚点完自动模式又对同一批账号重复发请求
-    {
-        let now = chrono::Utc::now().timestamp();
-        let state = app.state::<AppState>();
-        let mut cd = state.warmup_cooldown.lock().unwrap();
-        for (id, _) in &targets {
-            cd.insert(id.clone(), now);
-        }
     }
 
     let mut out = Vec::with_capacity(targets.len());
@@ -924,6 +964,18 @@ pub async fn warmup_account(app: AppHandle, id: String) -> Result<warmup::Warmup
 #[tauri::command]
 pub async fn warmup_all_dormant(app: AppHandle) -> Result<Vec<warmup::WarmupOutcome>, String> {
     warmup_all_dormant_inner(&app).await
+}
+
+/// 返回当前正在激活的账号，供页面启动时同步可能已经开始的后台任务。
+#[tauri::command]
+pub fn warmup_active_ids(state: State<'_, AppState>) -> Vec<String> {
+    state
+        .warmup_active
+        .lock()
+        .unwrap()
+        .iter()
+        .cloned()
+        .collect()
 }
 
 /// 查一下 codex CLI 在哪，给设置页显示用（找不到返回 null）。

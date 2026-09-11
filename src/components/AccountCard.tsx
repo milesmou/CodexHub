@@ -2,12 +2,10 @@ import { useState } from "react";
 import type { AccountView, QuotaWindow } from "../types";
 import { QuotaRing } from "./QuotaRing";
 import {
-  humanDuration,
   initial,
   isDormant5h,
   isExhausted,
   remainingPercent,
-  resetInSeconds,
   toneFor,
   windowLabel,
 } from "../format";
@@ -17,6 +15,8 @@ interface Props {
   /** 是否是综合评分最高的账号 */
   isBest: boolean;
   busy: boolean;
+  /** 正在查询额度或发送 5 小时窗口激活请求 */
+  requesting: boolean;
   /** 该账号正在激活 5 小时窗口 */
   warming: boolean;
   /** 有任何激活任务在跑（含批量），此时所有激活按钮都要禁用，避免重复发请求 */
@@ -33,10 +33,13 @@ interface Props {
 function WindowBlock({
   window: w,
   dormant = false,
+  fetchedAt = 0,
 }: {
   window: QuotaWindow | null | undefined;
   /** 该窗口是否从未启动（此时不显示倒计时，因为根本没有在倒计时） */
   dormant?: boolean;
+  /** 查询时间，用于接口没有返回绝对重置时间时换算 */
+  fetchedAt?: number;
 }) {
   if (!w) {
     return (
@@ -48,7 +51,22 @@ function WindowBlock({
   }
 
   const remaining = remainingPercent(w) ?? 0;
-  const secs = resetInSeconds(w);
+  const resetAt = w.reset_at > 0
+    ? w.reset_at
+    : fetchedAt > 0 && w.reset_after_seconds > 0
+      ? fetchedAt + w.reset_after_seconds
+      : 0;
+  const resetText =
+    resetAt > 0
+      ? `${new Intl.DateTimeFormat("zh-CN", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).format(new Date(resetAt * 1000))} 重置`
+      : "重置时间未知";
 
   return (
     <div className="ring-box">
@@ -61,9 +79,7 @@ function WindowBlock({
           {windowLabel(w.window_seconds)}窗口未启动
         </p>
       ) : (
-        <p className="reset">
-          {secs > 0 ? `${humanDuration(secs)}后重置` : "即将重置"}
-        </p>
+        <p className="reset">{resetText}</p>
       )}
     </div>
   );
@@ -73,6 +89,7 @@ export function AccountCard({
   account,
   isBest,
   busy,
+  requesting,
   warming,
   warmupLocked,
   onSwitch,
@@ -153,8 +170,16 @@ export function AccountCard({
         )}
         {!isOfficial && <span className="badge third">第三方</span>}
 
-        {/* 5 小时窗口没启动的话，右上角给一个激活入口 */}
-        {dormant && (
+        {requesting && (
+          <span
+            className="card-request-spinner"
+            title="请求处理中"
+            aria-label="请求处理中"
+          />
+        )}
+
+        {/* 请求运行时由统一的卡片转圈状态替代激活入口 */}
+        {dormant && !requesting && (
           <button
             className="warmup-btn"
             disabled={warming || warmupLocked}
@@ -184,8 +209,12 @@ export function AccountCard({
       ) : (
         <>
           <div className="rings">
-            <WindowBlock window={quota.primary} dormant={dormant} />
-            <WindowBlock window={quota.secondary} />
+            <WindowBlock
+              window={quota.primary}
+              dormant={dormant}
+              fetchedAt={quota.fetched_at}
+            />
+            <WindowBlock window={quota.secondary} fetchedAt={quota.fetched_at} />
           </div>
           {(quota.has_credits || quota.unlimited) && (
             <p className="credits">

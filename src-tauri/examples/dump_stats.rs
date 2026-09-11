@@ -7,7 +7,7 @@
 //! cargo run --release --example dump_stats -- 7    # 只看最近 7 天
 //! ```
 
-use codex_helper_lib::stats;
+use codex_hub_lib::stats;
 
 fn main() {
     let days: Option<u32> = std::env::args().nth(1).and_then(|s| s.parse().ok());

@@ -35,7 +35,7 @@ pub fn start(app: AppHandle) {
             tokio::time::sleep(Duration::from_secs(interval)).await;
 
             if let Err(e) = refresh_quotas_inner(&app, None).await {
-                eprintln!("[codex-helper] 定时刷新失败：{e}");
+                eprintln!("[codex-hub] 定时刷新失败：{e}");
             }
         }
     });

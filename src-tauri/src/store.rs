@@ -58,7 +58,7 @@ pub fn load() -> Vault {
         Ok(v) => v,
         Err(e) => {
             // 不让启动直接失败：打日志并退回空库，用户可重新导入一次
-            eprintln!("[codex-helper] 账号库读取失败：{e}");
+            eprintln!("[codex-hub] 账号库读取失败：{e}");
             Vault::default()
         }
     }

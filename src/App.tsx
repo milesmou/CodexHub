@@ -39,6 +39,7 @@ export default function App() {
 
   const [ready, setReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshingIds, setRefreshingIds] = useState<Set<string>>(() => new Set());
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [warmingId, setWarmingId] = useState<string | null>(null);
   const [warmingAll, setWarmingAll] = useState(false);
@@ -92,23 +93,40 @@ export default function App() {
         listen("accounts-changed", () => {
           void reload();
         }),
-        listen("refresh-started", () => setRefreshing(true)),
-        listen("refresh-finished", () => {
-          setRefreshing(false);
+        listen<string[]>("refresh-started", (e) => {
+          setRefreshingIds((current) => new Set([...current, ...e.payload]));
+        }),
+        listen<string[]>("refresh-finished", (e) => {
+          setRefreshingIds((current) => {
+            const next = new Set(current);
+            e.payload.forEach((id) => next.delete(id));
+            return next;
+          });
           void reload();
         }),
         listen<string>("toast", (e) => showToast(e.payload)),
         listen("settings-changed", () => {
           void api.getSettings().then(setSettings);
         }),
-        // 自动激活跑完：重查一次额度，让卡片上的「未启动」提示消失
-        listen("warmup-finished", () => {
-          void api.refreshQuotas().then(setAccounts).catch(() => undefined);
+        listen<string>("warmup-started", (e) => {
+          setWarmingId(e.payload);
+        }),
+        // 自动、单个和批量激活统一在这里结束状态并重查对应账号。
+        listen<string>("warmup-finished", (e) => {
+          setWarmingId((id) => (id === e.payload ? null : id));
+          void api.refreshQuotas([e.payload]).then(setAccounts).catch(() => undefined);
         }),
       ];
       const results = await Promise.all(subs);
-      if (alive) disposers.push(...results);
-      else results.forEach((d) => d());
+      if (alive) {
+        disposers.push(...results);
+        void Promise.all([api.refreshActiveIds(), api.warmupActiveIds()])
+          .then(([refreshIds, warmupIds]) => {
+            setRefreshingIds(new Set(refreshIds));
+            setWarmingId(warmupIds[0] ?? null);
+          })
+          .catch(() => undefined);
+      } else results.forEach((d) => d());
     })();
 
     return () => {
@@ -180,16 +198,6 @@ export default function App() {
     }
   }, [pendingSwitch, reload, showToast]);
 
-  const doImport = useCallback(async () => {
-    try {
-      const r = await api.importFromCcSwitch();
-      showToast(r.message);
-      await reload();
-    } catch (e) {
-      showToast(errorText(e));
-    }
-  }, [reload, showToast]);
-
   /** 激活单个账号的 5 小时窗口 */
   const doWarmup = useCallback(
     async (id: string) => {
@@ -199,9 +207,6 @@ export default function App() {
       try {
         const r = await api.warmupAccount(id);
         showToast(r.message);
-        await reload();
-        // 窗口刚被点着，立刻重查一次，让倒计时马上反映出来
-        setAccounts(await api.refreshQuotas([id]));
       } catch (e) {
         showToast(errorText(e));
       } finally {
@@ -224,10 +229,6 @@ export default function App() {
           ? `激活成功 ${okIds.length} 个，失败 ${failed} 个`
           : `已激活 ${okIds.length} 个账号的 5 小时窗口`,
       );
-      await reload();
-      if (okIds.length > 0) {
-        setAccounts(await api.refreshQuotas(okIds));
-      }
     } catch (e) {
       showToast(errorText(e));
     } finally {
@@ -326,14 +327,8 @@ export default function App() {
           : `「${current.name}」额度已耗尽`,
       });
     }
-    if (paths && !paths.ccswitch_available && accounts.length === 0) {
-      out.push({
-        tone: "info",
-        text: "没检测到 cc-switch，可以用「添加账号」把授权文件粘贴进来",
-      });
-    }
     return out;
-  }, [accounts, bestId, current, paths]);
+  }, [accounts, bestId, current]);
 
   // ------------------------------------------------------------ 渲染
 
@@ -341,7 +336,7 @@ export default function App() {
     <div className="app">
       <div className="topbar">
         <div className="brand">
-          <h1>CodexHelper</h1>
+          <h1>Codex Hub</h1>
           <span className="count">
             {accounts.length} 个账号 · {officialCount} 个可查额度
           </span>
@@ -358,7 +353,6 @@ export default function App() {
           <button disabled={refreshing} onClick={doRefresh}>
             {refreshing ? <span className="spin">↻</span> : "刷新额度"}
           </button>
-          <button onClick={doImport}>从 cc-switch 导入</button>
           <button onClick={() => setDialog({ mode: "create" })}>添加账号</button>
           <button onClick={() => setShowStats(true)}>统计</button>
           <button className="ghost" onClick={() => setShowSettings(true)}>
@@ -368,7 +362,10 @@ export default function App() {
       </div>
 
       <div className="scroll">
-        {dormantAccounts.length > 0 && (
+        {dormantAccounts.length > 0 &&
+          refreshingIds.size === 0 &&
+          !warmingAll &&
+          warmingId === null && (
           <div className="banners">
             <div className="banner info">
               <span className="dot" />
@@ -413,7 +410,6 @@ export default function App() {
               <button className="primary" onClick={() => setDialog({ mode: "create" })}>
                 添加账号
               </button>
-              <button onClick={doImport}>从 cc-switch 导入</button>
             </div>
           </div>
         ) : (
@@ -424,8 +420,11 @@ export default function App() {
                 account={a}
                 isBest={a.id === bestId}
                 busy={switchingId === a.id}
+                requesting={refreshingIds.has(a.id) || warmingId === a.id}
                 warming={warmingId === a.id}
-                warmupLocked={warmingAll || warmingId !== null}
+                warmupLocked={
+                  refreshingIds.size > 0 || warmingAll || warmingId !== null
+                }
                 onSwitch={requestSwitch}
                 onRename={doRename}
                 onEdit={doEdit}

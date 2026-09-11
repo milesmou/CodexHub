@@ -8,7 +8,7 @@
 //! cargo run --release --example dump_codex_procs
 //! ```
 
-use codex_helper_lib::codexapp;
+use codex_hub_lib::codexapp;
 
 fn main() {
     let status = codexapp::status();

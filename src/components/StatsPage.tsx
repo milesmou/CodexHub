@@ -9,10 +9,9 @@ interface Props {
 
 /** 时间范围选项：value = 0 表示全部历史 */
 const RANGES: { label: string; value: number }[] = [
+  { label: "今天", value: 1 },
   { label: "7 天", value: 7 },
   { label: "30 天", value: 30 },
-  { label: "90 天", value: 90 },
-  { label: "全部", value: 0 },
 ];
 
 /** 把最大值向上取到一个「好看」的刻度（1/2/5 × 10^n）。 */
@@ -185,7 +184,7 @@ function ShareBar({
 }
 
 export function StatsPage({ onClose }: Props) {
-  const [range, setRange] = useState<number>(30);
+  const [range, setRange] = useState<number>(1);
   const [stats, setStats] = useState<TokenStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

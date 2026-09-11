@@ -1,13 +1,13 @@
 [package]
-name = "codex-helper"
+name = "codex-hub"
 version = "0.1.0"
-description = "CodexHelper - 额度看板与快速切换"
-authors = ["CodexHelper"]
+description = "Codex Hub - 额度看板与快速切换"
+authors = ["Codex Hub"]
 edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "codex_helper_lib"
+name = "codex_hub_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -34,8 +34,10 @@ aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.22"
 keyring = { version = "3", features = ["windows-native"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
 sysinfo = "0.36.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
 # debug 构建：不生成 DWARF 调试信息。
 # 链接时间能砍掉一大半，代价是没法单步调试——本工具排错靠日志就够，不亏。

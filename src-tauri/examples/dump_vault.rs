@@ -8,8 +8,8 @@
 //! cargo run --release --example dump_vault
 //! ```
 
-use codex_helper_lib::model::AccountKind;
-use codex_helper_lib::store;
+use codex_hub_lib::model::AccountKind;
+use codex_hub_lib::store;
 
 fn main() {
     let vault = store::load();
@@ -47,12 +47,11 @@ fn main() {
         );
         println!("    邮箱     : {}", a.email.as_deref().unwrap_or("—"));
         println!("    套餐     : {}", a.plan_type.as_deref().unwrap_or("—"));
-        println!("    cc_id    : {}", a.cc_id.as_deref().unwrap_or("—"));
         println!("    凭证     : {cred}");
 
         match vault.quota_cache.get(&a.id) {
             Some(q) if q.ok => {
-                let win = |name: &str, w: &Option<codex_helper_lib::model::QuotaWindow>| {
+                let win = |name: &str, w: &Option<codex_hub_lib::model::QuotaWindow>| {
                     if let Some(w) = w {
                         let left = 100.0 - w.used_percent;
                         println!(
