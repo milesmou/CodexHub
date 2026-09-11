@@ -138,6 +138,9 @@ pub struct Settings {
     pub refresh_interval_secs: u64,
     /// 开机自动启动
     pub startup: bool,
+    /// 通过开机自启启动时不显示主窗口
+    #[serde(default)]
+    pub startup_silent: bool,
     /// 全局快捷键，空字符串表示不注册
     pub shortcut: String,
     /// 额度耗尽时发通知
@@ -163,6 +166,7 @@ impl Default for Settings {
         Self {
             refresh_interval_secs: 300,
             startup: true,
+            startup_silent: false,
             shortcut: "Ctrl+Alt+C".to_string(),
             notify_on_limit: false,
             notify_on_reset: true,

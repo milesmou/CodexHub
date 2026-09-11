@@ -168,7 +168,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--autostart"]),
         ))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -219,6 +219,16 @@ pub fn run() {
 
             tray::build(&handle)?;
             apply_settings(&handle);
+
+            // 配置中先隐藏主窗口，避免静默自启时闪屏；手动启动仍立即显示。
+            let silent_autostart = std::env::args().any(|arg| arg == "--autostart") && {
+                let state = handle.state::<AppState>();
+                let vault = state.vault.lock().unwrap();
+                vault.settings.startup && vault.settings.startup_silent
+            };
+            if !silent_autostart {
+                show_window(&handle);
+            }
             start_status_topmost_guard(handle.clone());
             scheduler::start(handle.clone());
 

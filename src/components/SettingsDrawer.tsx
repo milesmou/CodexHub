@@ -100,14 +100,25 @@ export function SettingsDrawer({
 
           <div className="field">
             <label>行为</label>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.startup}
-                onChange={(e) => patch("startup", e.target.checked)}
-              />
-              开启自启
-            </label>
+            <div className="behavior-row">
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.startup}
+                  onChange={(e) => patch("startup", e.target.checked)}
+                />
+                开启自启
+              </label>
+              <label className="checkbox dependent-option">
+                <input
+                  type="checkbox"
+                  checked={draft.startup_silent}
+                  disabled={!draft.startup}
+                  onChange={(e) => patch("startup_silent", e.target.checked)}
+                />
+                静默启动
+              </label>
+            </div>
             <label className="checkbox">
               <input
                 type="checkbox"

@@ -40,6 +40,8 @@ export interface AccountView {
 export interface Settings {
   refresh_interval_secs: number;
   startup: boolean;
+  /** 通过开机自启启动时不显示主窗口 */
+  startup_silent: boolean;
   shortcut: string;
   notify_on_limit: boolean;
   notify_on_reset: boolean;

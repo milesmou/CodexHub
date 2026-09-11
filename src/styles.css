@@ -558,7 +558,7 @@ select:focus {
   margin-bottom: 18px;
 }
 
-.field > label {
+.field > label:not(.checkbox) {
   display: block;
   font-size: 12px;
   color: var(--text-dim);
@@ -586,6 +586,30 @@ select:focus {
   height: 15px;
   accent-color: var(--accent);
   cursor: pointer;
+}
+
+.behavior-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(150px, 1.3fr);
+  align-items: center;
+  column-gap: 18px;
+}
+
+.behavior-row .checkbox {
+  margin-bottom: 10px;
+}
+
+.checkbox.dependent-option {
+  color: var(--text-dim);
+}
+
+.checkbox:has(input:disabled) {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.checkbox input:disabled {
+  cursor: default;
 }
 
 .paths {
