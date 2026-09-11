@@ -181,7 +181,7 @@ export default function TaskbarStatus() {
       }}
     >
       <span className={`taskbar-dot ${refreshing ? "pulse" : ""}`} />
-      <span className="taskbar-text">{refreshing ? "额度刷新中…" : status.text}</span>
+      <span className="taskbar-text">{status.text}</span>
     </button>
   );
 }
