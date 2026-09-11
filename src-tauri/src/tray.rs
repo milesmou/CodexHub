@@ -3,7 +3,8 @@
 use crate::commands::{self, AppState};
 use crate::codexapp;
 use crate::model::{Account, AccountKind, Quota, Vault};
-use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
+use tauri::image::Image;
+use tauri::menu::{IconMenuItemBuilder, Menu, MenuBuilder, MenuEvent, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, LogicalPosition, Manager, Wry};
 
@@ -18,12 +19,9 @@ fn remaining_text(w: Option<&crate::model::QuotaWindow>) -> String {
         .unwrap_or_else(|| "—".to_string())
 }
 
-/// 托盘里一行账号的文案：`● 欢哥的GPT · 5h 98% / 周 49%`
-///
+/// 托盘里一行账号的文案：`欢哥的GPT · 5h 98% / 周 49%`。
 /// 这里的百分比是**剩余**额度（接口给的是已用，减过了），跟主界面口径一致。
-fn account_line(account: &Account, quota: Option<&Quota>, is_current: bool) -> String {
-    let dot = if is_current { "●" } else { "○" };
-
+fn account_line(account: &Account, quota: Option<&Quota>) -> String {
     let tag = match quota {
         Some(q) if q.ok => format!(
             "5h {} / 周 {}",
@@ -37,7 +35,27 @@ fn account_line(account: &Account, quota: Option<&Quota>, is_current: bool) -> S
         },
     };
 
-    format!("{dot} {} · {tag}", account.name)
+    format!("{} · {tag}", account.name)
+}
+
+/// 当前账号的菜单图标。放进原生图标槽，不占账号文字本身的宽度。
+fn current_account_icon() -> Image<'static> {
+    const SIZE: u32 = 16;
+    const CENTER: f32 = (SIZE as f32 - 1.0) / 2.0;
+    const RADIUS: f32 = 5.0;
+    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
+
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = x as f32 - CENTER;
+            let dy = y as f32 - CENTER;
+            let distance = (dx * dx + dy * dy).sqrt();
+            let alpha = ((RADIUS + 0.5 - distance).clamp(0.0, 1.0) * 255.0) as u8;
+            rgba.extend_from_slice(&[154, 145, 240, alpha]);
+        }
+    }
+
+    Image::new_owned(rgba, SIZE, SIZE)
 }
 
 /// 悬停提示：显示当前账号和它的额度（同样是剩余）。
@@ -79,10 +97,18 @@ fn build_menu(app: &AppHandle, vault: &Vault) -> tauri::Result<Menu<Wry>> {
         );
     } else {
         for a in visible {
-            let label = account_line(a, vault.quota_cache.get(&a.id), vault.is_current(&a.id));
-            b = b.item(
-                &MenuItemBuilder::with_id(format!("switch:{}", a.id), label).build(app)?,
-            );
+            let label = account_line(a, vault.quota_cache.get(&a.id));
+            if vault.is_current(&a.id) {
+                b = b.item(
+                    &IconMenuItemBuilder::with_id(format!("switch:{}", a.id), label)
+                        .icon(current_account_icon())
+                        .build(app)?,
+                );
+            } else {
+                b = b.item(
+                    &MenuItemBuilder::with_id(format!("switch:{}", a.id), label).build(app)?,
+                );
+            }
         }
     }
 

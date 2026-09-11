@@ -90,7 +90,6 @@ async function syncVisibility() {
 
 export default function TaskbarStatus() {
   const [accounts, setAccounts] = useState<AccountView[]>([]);
-  const [refreshingIds, setRefreshingIds] = useState<Set<string>>(() => new Set());
 
   const reload = useCallback(() => {
     void api.listAccounts().then(setAccounts).catch(() => undefined);
@@ -111,24 +110,9 @@ export default function TaskbarStatus() {
       listen("settings-changed", () => {
         void syncVisibility().catch(() => undefined);
       }),
-      listen<string[]>("refresh-started", (event) => {
-        setRefreshingIds((current) => new Set([...current, ...event.payload]));
-      }),
-      listen<string[]>("refresh-finished", (event) => {
-        setRefreshingIds((current) => {
-          const next = new Set(current);
-          event.payload.forEach((id) => next.delete(id));
-          return next;
-        });
-        reload();
-      }),
     ]).then((subscriptions) => {
       if (alive) {
         disposers.push(...subscriptions);
-        void api
-          .refreshActiveIds()
-          .then((ids) => setRefreshingIds(new Set(ids)))
-          .catch(() => undefined);
       } else subscriptions.forEach((dispose) => dispose());
     });
 
@@ -141,23 +125,20 @@ export default function TaskbarStatus() {
 
   const current = accounts.find((account) => account.is_current) ?? null;
   const status = useMemo(() => {
-    if (!current) return { text: "Codex · 未选择账号", tone: "idle" };
+    if (!current) return { text: "Codex · 未选择账号" };
     if (current.kind === "third_party") {
-      return { text: `${current.name} · 按量`, tone: "healthy" };
+      return { text: `${current.name} · 按量` };
     }
     if (!current.quota?.ok) {
-      return { text: `${current.name} · 未查询`, tone: "idle" };
+      return { text: `${current.name} · 未查询` };
     }
     const fiveHour = remainingPercent(current.quota.primary);
     const weekly = remainingPercent(current.quota.secondary);
-    const min = Math.min(fiveHour ?? 100, weekly ?? 100);
     return {
       text: `5h ${fiveHour === null ? "—" : Math.round(fiveHour)}% · 周 ${weekly === null ? "—" : Math.round(weekly)}%`,
-      tone: min <= 15 ? "danger" : min < 50 ? "warning" : "healthy",
     };
   }, [current]);
 
-  const refreshing = current ? refreshingIds.has(current.id) : false;
   const tooltipText = current
     ? `当前账号：${current.name}\n${status.text}`
     : status.text;
@@ -172,7 +153,7 @@ export default function TaskbarStatus() {
 
   return (
     <button
-      className={`taskbar-status compact-status ${status.tone}`}
+      className="taskbar-status compact-status"
       aria-label={`${tooltipText}，单击打开主窗口，右键打开菜单`}
       onClick={() => void openMainWindow()}
       onContextMenu={(event) => {
@@ -180,7 +161,6 @@ export default function TaskbarStatus() {
         void api.popupStatusMenu(event.clientX);
       }}
     >
-      <span className={`taskbar-dot ${refreshing ? "pulse" : ""}`} />
       <span className="taskbar-text">{status.text}</span>
     </button>
   );

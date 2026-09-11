@@ -1285,7 +1285,6 @@ body.taskbar-body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
   padding: 0 10px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 7px;
@@ -1317,30 +1316,11 @@ body.taskbar-body {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
-.taskbar-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: var(--text-faint);
-}
-
-.taskbar-status.healthy .taskbar-dot { background: var(--ok); }
-.taskbar-status.warning .taskbar-dot { background: var(--warn); }
-.taskbar-status.danger .taskbar-dot { background: var(--danger); }
-
-.taskbar-dot.pulse {
-  background: var(--accent);
-  animation: taskbar-pulse 0.8s ease-in-out infinite alternate;
-}
-
 .taskbar-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-@keyframes taskbar-pulse { to { opacity: 0.35; } }
 
 .card-request-spinner {
   flex: 0 0 auto;
