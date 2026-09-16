@@ -7,7 +7,12 @@ import { AddAccountDialog } from "./components/AddAccountDialog";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { StatsPage } from "./components/StatsPage";
 import { SwitchConfirm } from "./components/SwitchConfirm";
-import { isDormant5h, isExhausted, pickBestAccount } from "./format";
+import {
+  isDormant5h,
+  isDormant5hBlocked,
+  isExhausted,
+  pickBestAccount,
+} from "./format";
 
 /** 添加 / 编辑账号弹窗的打开状态 */
 type DialogState =
@@ -337,7 +342,13 @@ export default function App() {
 
   /** 5 小时窗口从未启动、需要点一下的账号 */
   const dormantAccounts = useMemo(
-    () => accounts.filter((a) => a.kind === "official" && isDormant5h(a.quota)),
+    () =>
+      accounts.filter(
+        (a) =>
+          a.kind === "official" &&
+          isDormant5h(a.quota) &&
+          !isDormant5hBlocked(a.quota),
+      ),
     [accounts],
   );
 

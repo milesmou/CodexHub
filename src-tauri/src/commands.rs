@@ -930,15 +930,31 @@ pub async fn warmup_account_inner(
     id: &str,
 ) -> Result<warmup::WarmupOutcome, String> {
     // 1) 取快照。这里是短锁，且**不能跨 await**
-    let (auth, name) = snapshot(app, |vault| {
+    let (auth, name, blocked_by_weekly_limit, limited) = snapshot(app, |vault| {
         vault
             .find(id)
-            .map(|a| (a.auth.clone(), a.name.clone()))
+            .map(|a| {
+                let quota = vault.quota_cache.get(id);
+                (
+                    a.auth.clone(),
+                    a.name.clone(),
+                    quota.is_some_and(crate::model::Quota::secondary_exhausted),
+                    quota.is_some_and(|q| q.limit_reached),
+                )
+            })
             .ok_or_else(|| "账号不存在".to_string())
     })?;
 
     if !codex::is_official_auth(&auth) {
         return Err("只有官方账号才有 5 小时额度窗口".to_string());
+    }
+    if blocked_by_weekly_limit {
+        return Err("每周额度已耗尽，当前无法启动 5 小时窗口；周额度恢复后会自动重试".to_string());
+    }
+    if limited {
+        return Err(
+            "账号当前处于限流状态，暂时无法启动 5 小时窗口；额度恢复后会自动重试".to_string(),
+        );
     }
 
     // 所有入口共用一个运行槽，保证任何时刻最多只发一个激活请求。

@@ -5,6 +5,7 @@ import { QuotaRing } from "./QuotaRing";
 import {
   initial,
   isDormant5h,
+  isDormant5hBlocked,
   isExhausted,
   remainingPercent,
   toneFor,
@@ -40,11 +41,14 @@ interface Props {
 function WindowBlock({
   window: w,
   dormant = false,
+  warmupBlocked = false,
   fetchedAt = 0,
 }: {
   window: QuotaWindow | null | undefined;
   /** 该窗口是否从未启动（此时不显示倒计时，因为根本没有在倒计时） */
   dormant?: boolean;
+  /** 窗口未启动，但周额度已耗尽，当前无法用会话激活 */
+  warmupBlocked?: boolean;
   /** 查询时间，用于接口没有返回绝对重置时间时换算 */
   fetchedAt?: number;
 }) {
@@ -80,7 +84,9 @@ function WindowBlock({
       <QuotaRing percent={remaining} color={toneFor(remaining)} />
       <p className="label">{windowLabel(w.window_seconds)}</p>
       <p className="used">已用 {Math.round(w.used_percent)}%</p>
-      {dormant ? (
+      {warmupBlocked ? (
+        <p className="reset dormant-hint">等待周额度恢复</p>
+      ) : dormant ? (
         // 窗口没启动就没什么可倒计时的，直接说状态
         <p className="reset dormant-hint">
           {windowLabel(w.window_seconds)}窗口未启动
@@ -121,6 +127,7 @@ export function AccountCard({
   const isOfficial = account.kind === "official";
   // 5 小时窗口从未启动 —— 不点一下就永远不会重置
   const dormant = isOfficial && isDormant5h(quota);
+  const dormantBlocked = dormant && isDormant5hBlocked(quota);
 
   function commitRename() {
     const next = draft.trim();
@@ -217,7 +224,7 @@ export function AccountCard({
         )}
 
         {/* 请求运行时由统一的卡片转圈状态替代激活入口 */}
-        {dormant && !requesting && (
+        {dormant && !dormantBlocked && !requesting && (
           <button
             className="warmup-btn"
             disabled={warming || warmupLocked}
@@ -250,6 +257,7 @@ export function AccountCard({
             <WindowBlock
               window={quota.primary}
               dormant={dormant}
+              warmupBlocked={dormantBlocked}
               fetchedAt={quota.fetched_at}
             />
             <WindowBlock window={quota.secondary} fetchedAt={quota.fetched_at} />

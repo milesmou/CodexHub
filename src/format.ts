@@ -80,7 +80,7 @@ export function isExhausted(q: Quota | null | undefined): boolean {
 }
 
 /**
- * 5 小时窗口是不是「从未启动」—— 也就是可以激活的状态。
+ * 5 小时窗口是不是「从未启动」。是否当前可激活还要结合周额度判断。
  *
  * Codex 的 5 小时窗口是「用一次才开始计时」的。账号长期不用时，接口会返回
  * `used_percent = 0` 且 `reset_after_seconds` 恰好等于整个窗口长度（18000 秒），
@@ -95,6 +95,15 @@ export function isDormant5h(q: Quota | null | undefined): boolean {
   // window_seconds > 0 表示这个账号确实有主额度窗口
   if (!w || w.window_seconds <= 0) return false;
   return w.used_percent < 0.5 && w.reset_after_seconds >= w.window_seconds;
+}
+
+/**
+ * 5 小时窗口虽然休眠，但当前额度状态不允许用会话把它点着。
+ * 周额度恢复后，下一次刷新会重新开放手动/自动激活。
+ */
+export function isDormant5hBlocked(q: Quota | null | undefined): boolean {
+  if (!q || !q.ok || !isDormant5h(q)) return false;
+  return q.limit_reached || (q.secondary?.used_percent ?? 0) >= 100;
 }
 
 /** 取名字首字符做头像；中文取第一个字，英文取首字母。 */

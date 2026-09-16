@@ -110,9 +110,24 @@ pub struct Quota {
 }
 
 impl Quota {
-    /// 5 小时窗口（primary）是否处于未启动状态 —— 也就是「可以激活」。
+    /// 5 小时窗口（primary）是否处于未启动状态。
     pub fn primary_dormant(&self) -> bool {
         self.ok && self.primary.as_ref().is_some_and(QuotaWindow::is_dormant)
+    }
+
+    /// 周额度是否已经耗尽。
+    pub fn secondary_exhausted(&self) -> bool {
+        self.secondary
+            .as_ref()
+            .is_some_and(|window| window.used_percent >= 100.0)
+    }
+
+    /// 休眠的 5 小时窗口当前是否真的能通过会话激活。
+    ///
+    /// 周额度打满后，服务端会在创建会话前直接限流，请求无法触发主窗口计时。
+    /// 此时先等待周窗口恢复；下一次额度刷新会让它重新进入可激活队列。
+    pub fn primary_warmup_ready(&self) -> bool {
+        self.primary_dormant() && !self.secondary_exhausted() && !self.limit_reached
     }
 }
 
@@ -241,7 +256,7 @@ pub fn auth_fingerprint(auth: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod auth_fingerprint_tests {
-    use super::auth_fingerprint;
+    use super::{auth_fingerprint, Quota, QuotaWindow};
     use serde_json::json;
 
     #[test]
@@ -249,5 +264,32 @@ mod auth_fingerprint_tests {
         let before = json!({"tokens": {"account_id": "acc-1", "refresh_token": "old"}});
         let after = json!({"tokens": {"account_id": "acc-1", "refresh_token": "new"}});
         assert_eq!(auth_fingerprint(&before), auth_fingerprint(&after));
+    }
+
+    #[test]
+    fn dormant_primary_waits_until_weekly_quota_recovers() {
+        let dormant = QuotaWindow {
+            used_percent: 0.0,
+            window_seconds: 18_000,
+            reset_at: 0,
+            reset_after_seconds: 18_000,
+        };
+        let mut quota = Quota {
+            ok: true,
+            primary: Some(dormant),
+            secondary: Some(QuotaWindow {
+                used_percent: 100.0,
+                window_seconds: 604_800,
+                reset_at: 0,
+                reset_after_seconds: 3_600,
+            }),
+            ..Default::default()
+        };
+
+        assert!(quota.primary_dormant());
+        assert!(!quota.primary_warmup_ready());
+
+        quota.secondary.as_mut().unwrap().used_percent = 99.0;
+        assert!(quota.primary_warmup_ready());
     }
 }

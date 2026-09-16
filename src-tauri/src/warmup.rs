@@ -237,10 +237,12 @@ fn tail_of(s: &str, n: usize) -> String {
 
 // ---------------------------------------------------------------- 挑选目标
 
-/// 找出所有「5 小时窗口尚未启动」的官方账号 id。
+/// 找出所有「5 小时窗口尚未启动且当前可激活」的官方账号 id。
 ///
 /// 依据是额度缓存里 primary 窗口的 `is_dormant()`，所以**必须先刷新过一次额度**，
 /// 缓存里没数据或查询失败的账号不会被选中（宁可不点，也不要瞎点）。
+/// 周额度已经耗尽的账号也会暂时跳过，因为会话会在触发 5 小时窗口前被限流；
+/// 周窗口恢复后的下一次刷新会自动把它重新加入队列。
 pub fn dormant_ids(vault: &crate::model::Vault) -> Vec<String> {
     use crate::model::AccountKind;
 
@@ -252,7 +254,7 @@ pub fn dormant_ids(vault: &crate::model::Vault) -> Vec<String> {
             vault
                 .quota_cache
                 .get(&a.id)
-                .is_some_and(crate::model::Quota::primary_dormant)
+                .is_some_and(crate::model::Quota::primary_warmup_ready)
         })
         .collect();
 
