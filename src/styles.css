@@ -694,6 +694,17 @@ select:focus {
   color: var(--text-dim);
 }
 
+.field-label-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-label-actions button {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
 .mini-actions {
   display: flex;
   gap: 6px;

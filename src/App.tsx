@@ -506,6 +506,7 @@ export default function App() {
           onClose={() => setDialog(null)}
           onSaved={onDialogSaved}
           onError={showToast}
+          onNotice={showToast}
         />
       )}
 

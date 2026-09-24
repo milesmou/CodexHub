@@ -13,6 +13,7 @@ interface Props {
   /** 保存成功后回调（带上账号名与 id，便于刷新列表 / 额度） */
   onSaved: (name: string, id: string) => void;
   onError: (msg: string) => void;
+  onNotice: (msg: string) => void;
 }
 
 const AUTH_PLACEHOLDER =
@@ -29,6 +30,7 @@ export function AddAccountDialog({
   onClose,
   onSaved,
   onError,
+  onNotice,
 }: Props) {
   const [name, setName] = useState(account?.name ?? "");
   const [kind, setKind] = useState<AccountKind | null>(
@@ -127,6 +129,18 @@ export function AddAccountDialog({
       setPickedPath(null);
     } catch (e) {
       onError(errorText(e));
+    }
+  }
+
+  async function copyAuthPath() {
+    const path = /Macintosh|Mac OS X/i.test(navigator.userAgent)
+      ? "~/.codex/auth.json"
+      : "%USERPROFILE%\\.codex\\auth.json";
+    try {
+      await navigator.clipboard.writeText(path);
+      onNotice(`已复制授权文件路径：${path}`);
+    } catch (e) {
+      onError(`复制路径失败：${errorText(e)}`);
     }
   }
 
@@ -298,7 +312,12 @@ export function AddAccountDialog({
                 {kind === "official" ? (
                   <>
                     <div className="field-row">
-                      <label>授权内容（auth.json）</label>
+                      <div className="field-label-actions">
+                        <label>授权内容（auth.json）</label>
+                        <button type="button" className="ghost" onClick={() => void copyAuthPath()}>
+                          复制路径
+                        </button>
+                      </div>
                       <div className="mini-actions">
                         <button className="ghost" onClick={pickFile}>
                           从文件导入
