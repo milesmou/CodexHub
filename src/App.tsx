@@ -7,6 +7,7 @@ import { AddAccountDialog } from "./components/AddAccountDialog";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { StatsPage } from "./components/StatsPage";
 import { SwitchConfirm } from "./components/SwitchConfirm";
+import { WarmupScheduleDialog } from "./components/WarmupScheduleDialog";
 import {
   isDormant5h,
   isDormant5hBlocked,
@@ -40,6 +41,7 @@ function agoText(secs: number): string {
 export default function App() {
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [paths, setPaths] = useState<Paths | null>(null);
 
   const [ready, setReady] = useState(false);
@@ -50,6 +52,7 @@ export default function App() {
   const [warmingAll, setWarmingAll] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showStats, setShowStats] = useState(false);
+  const [scheduleAccountId, setScheduleAccountId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [pendingSwitch, setPendingSwitch] = useState<PendingSwitch | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -70,25 +73,24 @@ export default function App() {
     setAccounts(await api.listAccounts());
   }, []);
 
+  const loadSettings = useCallback(async () => {
+    setSettingsError(null);
+    try {
+      setSettings(await api.getSettings());
+    } catch (e) {
+      setSettingsError(errorText(e));
+    }
+  }, []);
+
   // 首次加载
   useEffect(() => {
-    (async () => {
-      try {
-        const [acc, st, p] = await Promise.all([
-          api.listAccounts(),
-          api.getSettings(),
-          api.getPaths(),
-        ]);
-        setAccounts(acc);
-        setSettings(st);
-        setPaths(p);
-      } catch (e) {
-        showToast(errorText(e));
-      } finally {
-        setReady(true);
-      }
-    })();
-  }, [showToast]);
+    // 各项独立回填，账号或路径读取失败不能阻止设置面板打开。
+    void reload()
+      .catch((e) => showToast(errorText(e)))
+      .finally(() => setReady(true));
+    void loadSettings();
+    void api.getPaths().then(setPaths).catch((e) => showToast(errorText(e)));
+  }, [reload, loadSettings, showToast]);
 
   // 订阅后端事件
   useEffect(() => {
@@ -113,7 +115,7 @@ export default function App() {
         }),
         listen<string>("toast", (e) => showToast(e.payload)),
         listen("settings-changed", () => {
-          void api.getSettings().then(setSettings);
+          void loadSettings();
         }),
         listen<string>("warmup-started", (e) => {
           setWarmingId(e.payload);
@@ -140,7 +142,7 @@ export default function App() {
       alive = false;
       disposers.forEach((d) => d());
     };
-  }, [reload, showToast]);
+  }, [reload, loadSettings, showToast]);
 
   useEffect(() => {
     const t = window.setInterval(() => setTick((v) => v + 1), 5000);
@@ -339,6 +341,7 @@ export default function App() {
   const officialCount = accounts.filter((a) => a.kind === "official").length;
   const bestId = useMemo(() => pickBestAccount(accounts), [accounts]);
   const current = accounts.find((a) => a.is_current) ?? null;
+  const scheduleAccount = accounts.find((a) => a.id === scheduleAccountId);
 
   /** 5 小时窗口从未启动、需要点一下的账号 */
   const dormantAccounts = useMemo(
@@ -398,7 +401,13 @@ export default function App() {
           </button>
           <button onClick={() => setDialog({ mode: "create" })}>添加账号</button>
           <button onClick={() => setShowStats(true)}>统计</button>
-          <button className="ghost" onClick={() => setShowSettings(true)}>
+          <button
+            className="ghost"
+            onClick={() => {
+              setShowSettings(true);
+              if (!settings) void loadSettings();
+            }}
+          >
             设置
           </button>
         </div>
@@ -481,6 +490,7 @@ export default function App() {
                 onRename={doRename}
                 onEdit={doEdit}
                 onWarmup={doWarmup}
+                onSchedule={setScheduleAccountId}
                 onToggleHidden={doToggleHidden}
                 onDelete={doDelete}
               />
@@ -489,9 +499,11 @@ export default function App() {
         )}
       </div>
 
-      {showSettings && settings && (
+      {showSettings && (
         <SettingsDrawer
           settings={settings}
+          loadError={settingsError}
+          onRetry={() => void loadSettings()}
           paths={paths}
           onClose={() => setShowSettings(false)}
           onSaved={setSettings}
@@ -511,6 +523,19 @@ export default function App() {
       )}
 
       {showStats && <StatsPage onClose={() => setShowStats(false)} />}
+
+      {scheduleAccount && (
+        <WarmupScheduleDialog
+          key={scheduleAccount.id}
+          account={scheduleAccount}
+          onClose={() => setScheduleAccountId(null)}
+          onSaved={() => {
+            setScheduleAccountId(null);
+            showToast("定时激活设置已保存");
+            void reload().catch((e) => showToast(errorText(e)));
+          }}
+        />
+      )}
 
       {pendingSwitch && (
         <SwitchConfirm

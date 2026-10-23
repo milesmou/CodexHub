@@ -77,7 +77,10 @@ fn describe_credential(auth: &Value) -> Option<String> {
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| !s.is_empty());
             return Some(if fresh {
-                format!("OAuth 登录态（access_token {} 字符，含 refresh_token）", at.len())
+                format!(
+                    "OAuth 登录态（access_token {} 字符，含 refresh_token）",
+                    at.len()
+                )
             } else {
                 format!("OAuth access_token {} 字符，但没有 refresh_token", at.len())
             });
@@ -264,11 +267,7 @@ pub async fn fetch_provider_models(base_url: &str, api_key: &str) -> Result<Vec<
 }
 
 /// 由表单构造一条账号记录。
-pub fn build_account(
-    payload: &NewAccountPayload,
-    sort_index: i32,
-    id: String,
-) -> Result<Account> {
+pub fn build_account(payload: &NewAccountPayload, sort_index: i32, id: String) -> Result<Account> {
     let auth = parse_auth_text(&payload.auth)?;
     let preview = preview(&auth);
 
@@ -302,6 +301,8 @@ pub fn build_account(
     };
 
     Ok(Account {
+        warmup_schedule: Default::default(),
+        last_scheduled_date: None,
         id,
         name,
         email: codex::email_from_auth(&auth),
@@ -312,7 +313,12 @@ pub fn build_account(
         config: None,
         base_url,
         models,
-        source: Some(payload.source.clone().unwrap_or_else(|| "manual".to_string())),
+        source: Some(
+            payload
+                .source
+                .clone()
+                .unwrap_or_else(|| "manual".to_string()),
+        ),
         sort_index,
         hidden: false,
         created_at: chrono::Utc::now().to_rfc3339(),
@@ -349,7 +355,9 @@ persistence = "save-all"
         let normalized = normalize_config_snippet(AccountKind::ThirdParty, Some(input))
             .expect("valid config")
             .expect("provider config remains");
-        let doc = normalized.parse::<toml_edit::DocumentMut>().expect("valid TOML");
+        let doc = normalized
+            .parse::<toml_edit::DocumentMut>()
+            .expect("valid TOML");
 
         assert_eq!(doc["model_provider"].as_str(), Some("custom"));
         assert!(doc.get("model_providers").is_some());

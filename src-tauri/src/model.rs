@@ -44,7 +44,92 @@ pub struct Account {
     pub sort_index: i32,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default)]
+    pub warmup_schedule: WarmupSchedule,
+    /// 本地日期；入队前持久化，防止重启后重复执行当天的定时任务。
+    #[serde(default)]
+    pub last_scheduled_date: Option<String>,
     pub created_at: String,
+}
+
+/// 每日定时激活，时间以本机时区的午夜起分钟数表示。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct WarmupSchedule {
+    pub enabled: bool,
+    pub quiet_start: u16,
+    pub quiet_end: u16,
+    pub activate_at: u16,
+}
+
+impl Default for WarmupSchedule {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            quiet_start: 0,
+            quiet_end: 540,
+            activate_at: 480,
+        }
+    }
+}
+
+impl WarmupSchedule {
+    /// 开始包含、结束不包含；起止相同表示全天管控。
+    pub fn contains(&self, minute: u16) -> bool {
+        if self.quiet_start < self.quiet_end {
+            minute >= self.quiet_start && minute < self.quiet_end
+        } else {
+            minute >= self.quiet_start || minute < self.quiet_end
+        }
+    }
+
+    pub fn suppresses_auto(&self, minute: u16) -> bool {
+        self.enabled && self.contains(minute)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if [self.quiet_start, self.quiet_end, self.activate_at]
+            .iter()
+            .any(|&m| m >= 1440)
+        {
+            return Err("时间必须在 00:00 至 23:59 之间".into());
+        }
+        if self.enabled && !self.contains(self.activate_at) {
+            return Err("激活时刻必须位于管控时间段内（不含结束时刻）".into());
+        }
+        Ok(())
+    }
+
+    pub fn is_due(&self, minute: u16, date: &str, last_date: Option<&str>) -> bool {
+        self.enabled
+            && self.validate().is_ok()
+            && minute == self.activate_at
+            && last_date != Some(date)
+    }
+
+    /// 串行排队允许稍晚执行，但不可跨出该次管控区间后再次补跑。
+    pub fn allows_queued(&self, date: &str, now: chrono::NaiveDateTime) -> bool {
+        if !self.enabled || self.validate().is_err() {
+            return false;
+        }
+        let Ok(day) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
+            return false;
+        };
+        let Some(start) = day.and_hms_opt(
+            (self.activate_at / 60) as u32,
+            (self.activate_at % 60) as u32,
+            0,
+        ) else {
+            return false;
+        };
+        let remaining = if self.quiet_start == self.quiet_end {
+            1440 - self.activate_at
+        } else {
+            (self.quiet_end + 1440 - self.activate_at) % 1440
+        };
+        let end = start + chrono::Duration::minutes(remaining as i64);
+        now >= start && now < end
+    }
 }
 
 /// 单个额度窗口。
@@ -144,6 +229,7 @@ pub struct AccountView {
     pub sort_index: i32,
     pub hidden: bool,
     pub source: Option<String>,
+    pub warmup_schedule: WarmupSchedule,
 }
 
 /// 定时刷新与行为相关的设置。
@@ -229,7 +315,11 @@ impl Vault {
     /// 判断某个 auth 对象是否已存在于账号库（用 account_id + 邮箱做指纹）。
     pub fn contains_auth(&self, auth: &serde_json::Value) -> bool {
         let fp = auth_fingerprint(auth);
-        fp.is_some() && self.accounts.iter().any(|a| auth_fingerprint(&a.auth) == fp)
+        fp.is_some()
+            && self
+                .accounts
+                .iter()
+                .any(|a| auth_fingerprint(&a.auth) == fp)
     }
 }
 
@@ -256,8 +346,80 @@ pub fn auth_fingerprint(auth: &serde_json::Value) -> Option<String> {
 
 #[cfg(test)]
 mod auth_fingerprint_tests {
-    use super::{auth_fingerprint, Quota, QuotaWindow};
+    use super::{auth_fingerprint, Account, Quota, QuotaWindow, WarmupSchedule};
     use serde_json::json;
+
+    #[test]
+    fn schedule_boundaries_and_cross_midnight() {
+        let mut schedule = WarmupSchedule {
+            enabled: true,
+            quiet_start: 1320,
+            quiet_end: 540,
+            activate_at: 480,
+        };
+        assert!(schedule.validate().is_ok());
+        for minute in [1320, 1439, 0, 480, 539] {
+            assert!(schedule.suppresses_auto(minute));
+        }
+        for minute in [540, 900, 1319] {
+            assert!(!schedule.suppresses_auto(minute));
+        }
+        schedule.quiet_start = 420;
+        assert!(!schedule.suppresses_auto(419));
+        assert!(schedule.suppresses_auto(420));
+        assert!(!schedule.suppresses_auto(540));
+        schedule.enabled = false;
+        assert!(!schedule.suppresses_auto(480));
+        assert!(!schedule.is_due(480, "2026-10-23", None));
+    }
+
+    #[test]
+    fn schedule_validation_and_full_day() {
+        let mut schedule = WarmupSchedule {
+            enabled: true,
+            ..Default::default()
+        };
+        schedule.activate_at = schedule.quiet_end;
+        assert!(schedule.validate().is_err());
+        schedule.quiet_end = schedule.quiet_start;
+        assert!(schedule.validate().is_ok());
+        for minute in [0, 539, 900, 1439] {
+            assert!(schedule.suppresses_auto(minute));
+        }
+        assert!(schedule.is_due(540, "2026-10-23", None));
+        assert!(!schedule.is_due(540, "2026-10-23", Some("2026-10-23")));
+        schedule.quiet_start = 1440;
+        assert!(schedule.validate().is_err());
+    }
+
+    #[test]
+    fn existing_accounts_default_to_no_schedule() {
+        let account: Account = serde_json::from_value(json!({
+            "id": "old", "name": "old", "kind": "official", "auth": {}, "created_at": "2026-10-23"
+        }))
+        .unwrap();
+        assert!(!account.warmup_schedule.enabled);
+        assert_eq!(account.last_scheduled_date, None);
+    }
+
+    #[test]
+    fn queued_schedule_expires_at_its_own_interval_end() {
+        let mut schedule = WarmupSchedule {
+            enabled: true,
+            quiet_start: 1320,
+            quiet_end: 540,
+            activate_at: 480,
+        };
+        let time =
+            |value: &str| chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M").unwrap();
+        assert!(schedule.allows_queued("2026-10-23", time("2026-10-23 08:30")));
+        assert!(!schedule.allows_queued("2026-10-23", time("2026-10-23 09:00")));
+        assert!(!schedule.allows_queued("2026-10-23", time("2026-10-23 22:00")));
+        assert!(!schedule.allows_queued("2026-10-23", time("2026-10-23 07:59")));
+        schedule.activate_at = 1380;
+        assert!(schedule.allows_queued("2026-10-23", time("2026-10-24 00:30")));
+        assert!(!schedule.allows_queued("2026-10-23", time("2026-10-24 09:00")));
+    }
 
     #[test]
     fn fingerprint_survives_refresh_token_rotation() {

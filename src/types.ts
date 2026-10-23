@@ -35,6 +35,14 @@ export interface AccountView {
   sort_index: number;
   hidden: boolean;
   source?: string | null;
+  warmup_schedule: WarmupSchedule;
+}
+
+export interface WarmupSchedule {
+  enabled: boolean;
+  quiet_start: number;
+  quiet_end: number;
+  activate_at: number;
 }
 
 export interface Settings {

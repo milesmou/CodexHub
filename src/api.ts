@@ -14,6 +14,7 @@ import type {
   SwitchOutcome,
   TokenStats,
   WarmupOutcome,
+  WarmupSchedule,
 } from "./types";
 
 export const api = {
@@ -44,6 +45,8 @@ export const api = {
     invoke<AccountView[]>("reorder_accounts", { ids }),
 
   getSettings: () => invoke<Settings>("get_settings"),
+  setWarmupSchedule: (id: string, schedule: WarmupSchedule) =>
+    invoke<void>("set_warmup_schedule", { id, schedule }),
   setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
   popupStatusMenu: (cursorX: number) =>
     invoke<void>("popup_status_menu", { cursorX }),

@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { DragEvent } from "react";
 import type { AccountView, QuotaWindow } from "../types";
 import { QuotaRing } from "./QuotaRing";
+import { minuteText } from "./WarmupScheduleDialog";
 import {
   initial,
   isDormant5h,
@@ -33,6 +34,7 @@ interface Props {
   onRename: (id: string, name: string) => void;
   onEdit: (id: string) => void;
   onWarmup: (id: string) => void;
+  onSchedule: (id: string) => void;
   onToggleHidden: (id: string, hidden: boolean) => void;
   onDelete: (id: string) => void;
 }
@@ -115,6 +117,7 @@ export function AccountCard({
   onRename,
   onEdit,
   onWarmup,
+  onSchedule,
   onToggleHidden,
   onDelete,
 }: Props) {
@@ -273,6 +276,16 @@ export function AccountCard({
       )}
 
       {/* 第一行：主操作（切换）单独占一行，避免被下面一排小按钮挤扁 */}
+      {isOfficial && account.warmup_schedule?.enabled && (
+        <button className="schedule-summary" onClick={() => onSchedule(account.id)}>
+          每日 {minuteText(account.warmup_schedule.activate_at)} 激活
+          <span>
+            {account.warmup_schedule.quiet_start === account.warmup_schedule.quiet_end
+              ? "全天管控自动激活"
+              : `${minuteText(account.warmup_schedule.quiet_start)}–${minuteText(account.warmup_schedule.quiet_end)} 管控自动激活`}
+          </span>
+        </button>
+      )}
       <div className="card-foot">
         {account.is_current ? (
           <button disabled>正在使用中</button>
@@ -299,6 +312,11 @@ export function AccountCard({
         >
           {editing ? "完成" : "重命名"}
         </button>
+        {isOfficial && (
+          <button className="ghost" title="设置该账号的每日激活时刻与自动激活管控时间段" onClick={() => onSchedule(account.id)}>
+            定时
+          </button>
+        )}
         <button
           className="ghost"
           title="编辑这个账号的授权文件 / 配置片段"

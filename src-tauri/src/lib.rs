@@ -160,9 +160,13 @@ pub fn apply_settings(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let vault = store::load();
-
     tauri::Builder::default()
+        // 单例插件必须最先注册，第二次启动在托盘和后台任务初始化前退出。
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if !args.iter().any(|arg| arg == "--autostart") {
+                show_window(app);
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -180,7 +184,6 @@ pub fn run() {
                 .build(),
         )
         .on_menu_event(tray::handle_menu_event)
-        .manage(AppState::new(vault))
         .manage(scheduler::NotifyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
@@ -192,6 +195,7 @@ pub fn run() {
             commands::reorder_accounts,
             commands::get_settings,
             commands::set_settings,
+            commands::set_warmup_schedule,
             commands::popup_status_menu,
             commands::taskbar_status_anchor,
             commands::get_paths,
@@ -212,6 +216,7 @@ pub fn run() {
             commands::codex_app_status,
         ])
         .setup(|app| {
+            app.manage(AppState::new(store::load()));
             let handle = app.handle().clone();
 
             // 用磁盘上的 auth.json 校准「当前账号」，比信任上次记录更靠谱

@@ -454,6 +454,40 @@ select:focus {
   white-space: nowrap;
 }
 
+.schedule-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  background: var(--accent-dim);
+  border-color: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.schedule-summary span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.modal.warmup-schedule-modal { width: 460px; }
+.schedule-fields { border: 0; padding: 0; margin: 18px 0 0; min-width: 0; }
+.schedule-fields:disabled { opacity: 0.45; }
+.schedule-time-range { display: flex; align-items: center; gap: 12px; }
+.schedule-time-range label { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; color: var(--text-dim); }
+.schedule-time-range input { width: 100%; }
+.schedule-explanation { color: var(--text-dim); font-size: 12px; }
+.warmup-schedule-modal .hint { color: var(--text-faint); font-size: 11px; }
+.schedule-error { color: var(--danger); }
+
 .credits {
   font-size: 11px;
   color: var(--text-faint);

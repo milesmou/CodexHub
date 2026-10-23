@@ -5,6 +5,7 @@
 
 use crate::model::*;
 use crate::{accounts, codex, codexapp, quota, stats, store, tray, warmup};
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -26,6 +27,8 @@ pub struct AppState {
     pub warmup_cooldown: Mutex<HashMap<String, i64>>,
     /// 当前正在发送 5 小时窗口激活请求的账号；所有入口共用这一把全局锁。
     pub warmup_active: Mutex<Option<String>>,
+    /// 定时队列等待此锁，手动和普通自动请求则立即返回忙碌状态。
+    pub warmup_gate: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -35,6 +38,7 @@ impl AppState {
             refresh_active: Mutex::new(HashMap::new()),
             warmup_cooldown: Mutex::new(HashMap::new()),
             warmup_active: Mutex::new(None),
+            warmup_gate: tokio::sync::Mutex::new(()),
         }
     }
 }
@@ -84,6 +88,7 @@ fn to_views(vault: &Vault) -> Vec<AccountView> {
                 sort_index: a.sort_index,
                 hidden: a.hidden,
                 source: a.source.clone(),
+                warmup_schedule: a.warmup_schedule.clone(),
             }
         })
         .collect();
@@ -240,8 +245,19 @@ pub async fn refresh_quotas_inner(
 /// 做完也**不回头再刷一次额度** —— 那会和「刷新触发激活」形成回环。
 /// 窗口一旦真正启动，下次定时刷新就会自然反映到界面上。
 fn maybe_auto_warmup(app: &AppHandle) {
+    let minute = local_minute();
     let (enabled, targets) = snapshot(app, |vault| {
-        (vault.settings.warmup_auto, warmup::dormant_ids(vault))
+        (
+            vault.settings.warmup_auto,
+            warmup::dormant_ids(vault)
+                .into_iter()
+                .filter(|id| {
+                    vault
+                        .find(id)
+                        .is_some_and(|a| !a.warmup_schedule.suppresses_auto(minute))
+                })
+                .collect::<Vec<_>>(),
+        )
     });
 
     if !enabled || targets.is_empty() {
@@ -275,7 +291,7 @@ fn maybe_auto_warmup(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         // 串行执行：一次只起一个 CLI 进程，别把机器打满
         for id in due {
-            match warmup_account_inner(&app_handle, &id).await {
+            match warmup_account_with_trigger(&app_handle, &id, WarmupTrigger::Automatic).await {
                 Ok(o) => eprintln!("[codex-hub] 自动激活「{}」成功", o.name),
                 Err(e) => eprintln!("[codex-hub] 自动激活失败（{id}）：{e}"),
             }
@@ -457,7 +473,8 @@ pub fn sync_current_from_disk(app: &AppHandle) {
     // Codex 可能已经把轮换后的 token 写回 auth.json；同步到账号库，后续即使
     // Codex 已关闭，额度刷新也不会再使用失效的旧 refresh_token。
     if let Some(index) = found_index {
-        if vault.accounts[index].kind == AccountKind::Official && vault.accounts[index].auth != auth {
+        if vault.accounts[index].kind == AccountKind::Official && vault.accounts[index].auth != auth
+        {
             vault.accounts[index].auth = auth;
             changed = true;
         }
@@ -524,7 +541,11 @@ pub async fn codex_app_status() -> Result<codexapp::AppStatus, String> {
 }
 
 #[tauri::command]
-pub fn delete_account(app: AppHandle, state: State<'_, AppState>, id: String) -> Result<(), String> {
+pub fn delete_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
     let mut vault = state.vault.lock().unwrap();
     vault.accounts.retain(|a| a.id != id);
     vault.quota_cache.remove(&id);
@@ -544,7 +565,9 @@ pub fn update_account(
     sort_index: Option<i32>,
 ) -> Result<(), String> {
     let mut vault = state.vault.lock().unwrap();
-    let acc = vault.find_mut(&id).ok_or_else(|| "账号不存在".to_string())?;
+    let acc = vault
+        .find_mut(&id)
+        .ok_or_else(|| "账号不存在".to_string())?;
     if let Some(n) = name {
         acc.name = n;
     }
@@ -555,6 +578,27 @@ pub fn update_account(
         acc.sort_index = s;
     }
     persist(&app, &vault)
+}
+
+#[tauri::command]
+pub fn set_warmup_schedule(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    schedule: WarmupSchedule,
+) -> Result<(), String> {
+    schedule.validate()?;
+    let mut vault = state.vault.lock().unwrap();
+    let mut next = vault.clone();
+    let account = next.find_mut(&id).ok_or("账号不存在")?;
+    if account.kind != AccountKind::Official {
+        return Err("只有官方账号支持定时激活额度".into());
+    }
+    account.warmup_schedule = schedule;
+    store::save(&next).map_err(|e| format!("{e}"))?;
+    *vault = next;
+    let _ = app.emit("accounts-changed", ());
+    Ok(())
 }
 
 /// 按前端给出的完整 id 顺序一次性重排账号，避免逐条更新造成中间状态闪动。
@@ -679,7 +723,10 @@ pub struct PickedFile {
 
 /// 弹出系统文件选择框，读取一份授权文件。
 #[tauri::command]
-pub async fn pick_auth_file(app: AppHandle, title: Option<String>) -> Result<Option<PickedFile>, String> {
+pub async fn pick_auth_file(
+    app: AppHandle,
+    title: Option<String>,
+) -> Result<Option<PickedFile>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -698,8 +745,7 @@ pub async fn pick_auth_file(app: AppHandle, title: Option<String>) -> Result<Opt
     };
 
     let path = file_path.into_path().map_err(|e| format!("{e}"))?;
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读取文件失败：{e}"))?;
+    let content = std::fs::read_to_string(&path).map_err(|e| format!("读取文件失败：{e}"))?;
 
     Ok(Some(PickedFile {
         path: path.display().to_string(),
@@ -790,8 +836,8 @@ pub fn create_account(
 
     let mut vault = state.vault.lock().unwrap();
     let sort_index = vault.accounts.len() as i32;
-    let account = accounts::build_account(&payload, sort_index, id.clone())
-        .map_err(|e| format!("{e}"))?;
+    let account =
+        accounts::build_account(&payload, sort_index, id.clone()).map_err(|e| format!("{e}"))?;
 
     if vault.contains_auth(&account.auth) {
         return Err("这个账号已经在列表里了".to_string());
@@ -856,7 +902,10 @@ pub fn update_account_credentials(
     let base_url_was_supplied = payload.base_url.is_some();
     let models_were_supplied = payload.models.is_some();
     let incoming_base_url = if target_kind == AccountKind::ThirdParty && base_url_was_supplied {
-        Some(accounts::normalize_base_url(payload.base_url.as_deref()).map_err(|e| format!("{e}"))?)
+        Some(
+            accounts::normalize_base_url(payload.base_url.as_deref())
+                .map_err(|e| format!("{e}"))?,
+        )
     } else {
         None
     };
@@ -929,6 +978,83 @@ pub async fn warmup_account_inner(
     app: &AppHandle,
     id: &str,
 ) -> Result<warmup::WarmupOutcome, String> {
+    warmup_account_with_trigger(app, id, WarmupTrigger::Manual).await
+}
+
+fn local_minute() -> u16 {
+    let now = chrono::Local::now();
+    (now.hour() * 60 + now.minute()) as u16
+}
+
+enum WarmupTrigger {
+    Manual,
+    Automatic,
+    Scheduled(crate::scheduler::ScheduledWarmup),
+}
+
+async fn warmup_account_with_trigger(
+    app: &AppHandle,
+    id: &str,
+    trigger: WarmupTrigger,
+) -> Result<warmup::WarmupOutcome, String> {
+    let state = app.state::<AppState>();
+    let _gate = match &trigger {
+        WarmupTrigger::Scheduled(_) => state.warmup_gate.lock().await,
+        _ => state
+            .warmup_gate
+            .try_lock()
+            .map_err(|_| "已有账号正在激活 5 小时窗口".to_string())?,
+    };
+
+    // 队列可能等待过，发送前再次校验设置与时间，避免旧任务越过管控边界。
+    if !matches!(trigger, WarmupTrigger::Manual) {
+        let now = chrono::Local::now();
+        let minute = (now.hour() * 60 + now.minute()) as u16;
+        snapshot(app, |vault| {
+            let account = vault.find(id).ok_or("账号不存在")?;
+            match &trigger {
+                WarmupTrigger::Automatic
+                    if !vault.settings.warmup_auto
+                        || account.warmup_schedule.suppresses_auto(minute) =>
+                {
+                    return Err("当前时间已暂停该账号的普通自动激活".to_string())
+                }
+                WarmupTrigger::Scheduled(job)
+                    if account.warmup_schedule != job.schedule
+                        || !account
+                            .warmup_schedule
+                            .allows_queued(&job.date, now.naive_local()) =>
+                {
+                    return Err("定时设置已变更或已离开管控时间段，跳过本次任务".to_string())
+                }
+                _ => {}
+            }
+            Ok(())
+        })?;
+    }
+
+    if !matches!(trigger, WarmupTrigger::Manual) {
+        let ready = snapshot(app, |vault| {
+            vault
+                .quota_cache
+                .get(id)
+                .is_some_and(Quota::primary_warmup_ready)
+        });
+        if !ready {
+            return Err("窗口已启动、额度不可用或查询失败，跳过本次激活".into());
+        }
+        let last = state
+            .warmup_cooldown
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied()
+            .unwrap_or(0);
+        if chrono::Utc::now().timestamp() - last < WARMUP_COOLDOWN_SECS {
+            return Err("该账号刚执行过激活，跳过重复请求".into());
+        }
+    }
+
     // 1) 取快照。这里是短锁，且**不能跨 await**
     let (auth, name, blocked_by_weekly_limit, limited) = snapshot(app, |vault| {
         vault
@@ -995,6 +1121,35 @@ pub async fn warmup_account_inner(
         name,
         log_tail: Some(tail),
     })
+}
+
+pub async fn run_scheduled_warmup(app: &AppHandle, job: crate::scheduler::ScheduledWarmup) {
+    let id = job.id.clone();
+    // 使用最新额度；定时刷新不会再触发普通自动激活。
+    if let Err(error) = refresh_quotas_inner(app, Some(vec![id.clone()])).await {
+        eprintln!("[codex-hub] 定时激活前刷新额度失败（{id}）：{error}");
+        return;
+    }
+    // 若刚才与后台刷新合并，等该请求写回缓存后再判断窗口状态。
+    let state = app.state::<AppState>();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        let refreshing = state.refresh_active.lock().unwrap().contains_key(&id);
+        if !refreshing {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            eprintln!("[codex-hub] 定时激活等待额度查询超时（{id}）");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+    match warmup_account_with_trigger(app, &id, WarmupTrigger::Scheduled(job)).await {
+        Ok(result) => eprintln!("[codex-hub] 定时激活「{}」成功", result.name),
+        Err(error) => {
+            eprintln!("[codex-hub] 定时激活（{id}）：{error}");
+        }
+    }
 }
 
 /// 把所有「5 小时窗口尚未启动」的账号一次性点着。
