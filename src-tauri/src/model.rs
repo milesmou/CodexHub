@@ -49,7 +49,18 @@ pub struct Account {
     /// 本地日期；入队前持久化，防止重启后重复执行当天的定时任务。
     #[serde(default)]
     pub last_scheduled_date: Option<String>,
+    /// 已入队但尚未完成的任务，供失败重试和重启恢复。
+    #[serde(default)]
+    pub pending_scheduled_warmup: Option<PendingScheduledWarmup>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingScheduledWarmup {
+    pub date: String,
+    pub schedule: WarmupSchedule,
+    /// Unix 秒；同一账号重试期间不占用其他账号的执行队列。
+    pub retry_after: i64,
 }
 
 /// 每日定时激活，时间以本机时区的午夜起分钟数表示。

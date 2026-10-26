@@ -1123,31 +1123,82 @@ async fn warmup_account_with_trigger(
     })
 }
 
-pub async fn run_scheduled_warmup(app: &AppHandle, job: crate::scheduler::ScheduledWarmup) {
-    let id = job.id.clone();
-    // 使用最新额度；定时刷新不会再触发普通自动激活。
-    if let Err(error) = refresh_quotas_inner(app, Some(vec![id.clone()])).await {
-        eprintln!("[codex-hub] 定时激活前刷新额度失败（{id}）：{error}");
-        return;
-    }
+async fn refresh_scheduled_quota(app: &AppHandle, id: &str) -> Result<Quota, String> {
+    // 使用最新额度；单账号刷新不会触发普通自动激活。
+    refresh_quotas_inner(app, Some(vec![id.to_string()])).await?;
     // 若刚才与后台刷新合并，等该请求写回缓存后再判断窗口状态。
     let state = app.state::<AppState>();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        let refreshing = state.refresh_active.lock().unwrap().contains_key(&id);
+        let refreshing = state.refresh_active.lock().unwrap().contains_key(id);
         if !refreshing {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
-            eprintln!("[codex-hub] 定时激活等待额度查询超时（{id}）");
-            return;
+            return Err("等待额度查询超时".into());
         }
         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
-    match warmup_account_with_trigger(app, &id, WarmupTrigger::Scheduled(job)).await {
-        Ok(result) => eprintln!("[codex-hub] 定时激活「{}」成功", result.name),
+    snapshot(app, |vault| {
+        let quota = vault.quota_cache.get(id).ok_or("没有额度查询结果")?;
+        if !quota.ok {
+            return Err(quota.error.clone().unwrap_or_else(|| "额度查询失败".into()));
+        }
+        Ok(quota.clone())
+    })
+}
+
+pub async fn run_scheduled_warmup(
+    app: &AppHandle,
+    job: crate::scheduler::ScheduledWarmup,
+) -> crate::scheduler::ScheduledResult {
+    use crate::scheduler::{record, ScheduledResult};
+    let id = job.id.clone();
+    let quota = match refresh_scheduled_quota(app, &id).await {
+        Ok(quota) => quota,
         Err(error) => {
-            eprintln!("[codex-hub] 定时激活（{id}）：{error}");
+            record("quota_failed", &id, &error);
+            return ScheduledResult::RetryAfter(60);
+        }
+    };
+    if quota
+        .primary
+        .as_ref()
+        .is_some_and(|window| !window.is_dormant())
+    {
+        record("already_active", &id, "5 小时窗口已经启动，无需重复激活");
+        return ScheduledResult::Finished;
+    }
+    if !quota.primary_warmup_ready() {
+        record("quota_unavailable", &id, "额度暂不可用，等待恢复后重试");
+        return ScheduledResult::RetryAfter(300);
+    }
+    match warmup_account_with_trigger(app, &id, WarmupTrigger::Scheduled(job)).await {
+        Ok(_) => {
+            // CLI 正常退出不代表窗口已启动，必须以服务端额度结果确认。
+            match refresh_scheduled_quota(app, &id).await {
+                Ok(quota)
+                    if quota
+                        .primary
+                        .as_ref()
+                        .is_some_and(|window| !window.is_dormant()) =>
+                {
+                    record("success", &id, "已确认 5 小时窗口开始计时");
+                    ScheduledResult::Finished
+                }
+                Ok(_) => {
+                    record("unconfirmed", &id, "CLI 已结束，但额度接口尚未确认窗口启动");
+                    ScheduledResult::RetryAfter(WARMUP_COOLDOWN_SECS)
+                }
+                Err(error) => {
+                    record("verification_failed", &id, &error);
+                    ScheduledResult::RetryAfter(WARMUP_COOLDOWN_SECS)
+                }
+            }
+        }
+        Err(error) => {
+            record("activation_failed", &id, &error);
+            ScheduledResult::RetryAfter(WARMUP_COOLDOWN_SECS)
         }
     }
 }

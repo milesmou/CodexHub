@@ -303,6 +303,7 @@ pub fn build_account(payload: &NewAccountPayload, sort_index: i32, id: String) -
     Ok(Account {
         warmup_schedule: Default::default(),
         last_scheduled_date: None,
+        pending_scheduled_warmup: None,
         id,
         name,
         email: codex::email_from_auth(&auth),

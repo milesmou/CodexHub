@@ -82,9 +82,9 @@ export function WarmupScheduleDialog({ account, onClose, onSaved }: {
             </div>
           </fieldset>
           <p className="schedule-explanation">
-            管控时间段内跳过普通自动激活，仅在指定时刻尝试一次；时间段外沿用全局自动激活设置。手动激活仍可使用。
+            管控时间段内跳过普通自动激活，在指定时刻启动定时任务，失败后在本次区间内重试；时间段外沿用全局自动激活设置。手动激活仍可使用。
           </p>
-          <p className="hint">按电脑本地时间执行，需保持 Codex Hub 后台运行。仅激活尚未启动且额度可用的窗口；多个账号按顺序处理。错过时刻不补跑，失败等待次日。</p>
+          <p className="hint">按电脑本地时间执行，需保持 Codex Hub 后台运行。仅激活尚未启动且额度可用的窗口；多个账号按顺序处理。错过首次触发时刻不补跑；已触发任务失败会重试，重启后仍可恢复，离开本次管控区间即停止。</p>
           {error && <p className="schedule-error" role="alert">{error}</p>}
         </div>
         <div className="modal-foot">

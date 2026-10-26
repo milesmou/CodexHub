@@ -48,6 +48,9 @@ fn main() {
         println!("    邮箱     : {}", a.email.as_deref().unwrap_or("—"));
         println!("    套餐     : {}", a.plan_type.as_deref().unwrap_or("—"));
         println!("    凭证     : {cred}");
+        println!("    定时设置 : {:?}", a.warmup_schedule);
+        println!("    上次入队 : {:?}", a.last_scheduled_date);
+        println!("    待重试   : {:?}", a.pending_scheduled_warmup);
 
         match vault.quota_cache.get(&a.id) {
             Some(q) if q.ok => {
