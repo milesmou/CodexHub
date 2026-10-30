@@ -52,7 +52,30 @@ pub struct Account {
     /// 已入队但尚未完成的任务，供失败重试和重启恢复。
     #[serde(default)]
     pub pending_scheduled_warmup: Option<PendingScheduledWarmup>,
+    /// 结果尚未确认的重置卡兑换；重试必须沿用同一卡和请求 ID。
+    #[serde(default)]
+    pub pending_reset_redemption: Option<ResetRedemption>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetRedemption {
+    pub credit_id: String,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetCredit {
+    pub id: String,
+    pub expires_at: Option<i64>,
+    pub granted_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetCredits {
+    pub available_count: u64,
+    /// 只保留当前套餐支持、未过期且可用的卡，最先到期的排在前面。
+    pub credits: Vec<ResetCredit>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -200,6 +223,10 @@ pub struct Quota {
     /// 是否已经撞到限流
     #[serde(default)]
     pub limit_reached: bool,
+    #[serde(default)]
+    pub reset_credits: Option<ResetCredits>,
+    #[serde(default)]
+    pub reset_credits_error: Option<String>,
     /// 查询时间（unix 秒）
     #[serde(default)]
     pub fetched_at: i64,
@@ -241,6 +268,7 @@ pub struct AccountView {
     pub hidden: bool,
     pub source: Option<String>,
     pub warmup_schedule: WarmupSchedule,
+    pub reset_pending: bool,
 }
 
 /// 定时刷新与行为相关的设置。

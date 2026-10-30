@@ -16,6 +16,7 @@
 
 use crate::model::{Quota, QuotaWindow};
 use anyhow::{anyhow, Context, Result};
+use reqwest::Method;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -49,34 +50,7 @@ fn build_client() -> Result<reqwest::Client> {
 
 /// 查询单个账号的额度。
 pub async fn fetch(auth: &Value) -> FetchOutcome {
-    let tokens = match auth.get("tokens") {
-        Some(t) => t,
-        None => {
-            return FetchOutcome {
-                quota: fail("该账号是第三方 API Key，没有订阅额度窗口"),
-                refreshed_auth: None,
-            }
-        }
-    };
-
-    let access_token = tokens
-        .get("access_token")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    if access_token.is_empty() {
-        return FetchOutcome {
-            quota: fail("账号缺少 access_token，请重新登录"),
-            refreshed_auth: None,
-        };
-    }
-    let account_id = tokens
-        .get("account_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let client = match build_client() {
+    let mut client = match AccountClient::new(auth) {
         Ok(c) => c,
         Err(e) => {
             return FetchOutcome {
@@ -86,59 +60,30 @@ pub async fn fetch(auth: &Value) -> FetchOutcome {
         }
     };
 
-    // 第一轮：直接用现有 token
-    // 注意：刷新成功会走提前 return，所以这里不需要可变绑定
-    let refreshed_auth = None;
-    let mut last_error: Option<String> = None;
+    let quota = fetch_with_client(&mut client).await;
+    FetchOutcome {
+        quota,
+        refreshed_auth: client.refreshed_auth,
+    }
+}
 
+pub(crate) async fn fetch_with_client(client: &mut AccountClient) -> Quota {
+    let mut last_error = "查询失败".to_string();
     for url in USAGE_URLS {
-        match request_usage(&client, url, &access_token, &account_id).await {
-            Ok(UsageResponse::Ok(body)) => {
+        match client.get(url).await {
+            Ok(body) => {
                 let mut quota = parse_quota(&body);
-                quota.fetched_at = now_secs();
-                return FetchOutcome {
-                    quota,
-                    refreshed_auth,
-                };
-            }
-            Ok(UsageResponse::Unauthorized) => {
-                // token 过期，尝试刷新一次
-                match refresh_token(&client, auth).await {
-                    Ok(new_auth) => {
-                        let new_token = new_auth
-                            .get("tokens")
-                            .and_then(|t| t.get("access_token"))
-                            .and_then(|v| v.as_str())
-                            .unwrap_or_default()
-                            .to_string();
-                        match request_usage(&client, url, &new_token, &account_id).await {
-                            Ok(UsageResponse::Ok(body)) => {
-                                let mut quota = parse_quota(&body);
-                                quota.fetched_at = now_secs();
-                                return FetchOutcome {
-                                    quota,
-                                    refreshed_auth: Some(new_auth),
-                                };
-                            }
-                            Ok(UsageResponse::Unauthorized) => {
-                                last_error = Some("登录态已失效，请重新登录该账号".into());
-                            }
-                            Ok(UsageResponse::Error(msg)) => last_error = Some(msg),
-                            Err(e) => last_error = Some(format!("{e}")),
-                        }
-                    }
-                    Err(e) => last_error = Some(format!("刷新登录态失败：{e}")),
+                // 重置卡查询失败不影响订阅额度展示。
+                match crate::reset_credits::fetch(client).await {
+                    Ok(credits) => quota.reset_credits = Some(credits),
+                    Err(error) => quota.reset_credits_error = Some(format!("{error}")),
                 }
+                return quota;
             }
-            Ok(UsageResponse::Error(msg)) => last_error = Some(msg),
-            Err(e) => last_error = Some(format!("{e}")),
+            Err(error) => last_error = format!("{error}"),
         }
     }
-
-    FetchOutcome {
-        quota: fail(last_error.as_deref().unwrap_or("查询失败")),
-        refreshed_auth,
-    }
+    fail(&last_error)
 }
 
 fn fail(msg: &str) -> Quota {
@@ -150,42 +95,77 @@ fn fail(msg: &str) -> Quota {
     }
 }
 
-enum UsageResponse {
-    Ok(Value),
-    Unauthorized,
-    Error(String),
+/// 同一账号的连续请求共用刷新后的 token；调用方负责持久化 refreshed_auth。
+pub(crate) struct AccountClient {
+    client: reqwest::Client,
+    auth: Value,
+    pub refreshed_auth: Option<Value>,
+    refresh_attempted: bool,
 }
 
-async fn request_usage(
-    client: &reqwest::Client,
-    url: &str,
-    access_token: &str,
-    account_id: &str,
-) -> Result<UsageResponse> {
-    let mut req = client
-        .get(url)
-        .header("Authorization", format!("Bearer {access_token}"))
-        .header("Accept", "application/json");
-    if !account_id.is_empty() {
-        req = req.header("ChatGPT-Account-Id", account_id);
+impl AccountClient {
+    pub fn new(auth: &Value) -> Result<Self> {
+        let tokens = auth
+            .get("tokens")
+            .context("该账号是第三方 API Key，没有订阅额度窗口")?;
+        if tokens
+            .get("access_token")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .is_empty()
+        {
+            return Err(anyhow!("账号缺少 access_token，请重新登录"));
+        }
+        Ok(Self {
+            client: build_client()?,
+            auth: auth.clone(),
+            refreshed_auth: None,
+            refresh_attempted: false,
+        })
     }
 
-    let resp = req.send().await.context("请求额度接口失败")?;
-    let status = resp.status();
-
-    if status.as_u16() == 401 || status.as_u16() == 403 {
-        return Ok(UsageResponse::Unauthorized);
-    }
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        return Ok(UsageResponse::Error(format!(
-            "额度接口返回 {status}：{}",
-            body.chars().take(160).collect::<String>()
-        )));
+    pub async fn get(&mut self, url: &str) -> Result<Value> {
+        self.request(Method::GET, url, None).await
     }
 
-    let body: Value = resp.json().await.context("额度接口返回的不是 JSON")?;
-    Ok(UsageResponse::Ok(body))
+    pub async fn post(&mut self, url: &str, body: &Value) -> Result<Value> {
+        self.request(Method::POST, url, Some(body)).await
+    }
+
+    async fn request(&mut self, method: Method, url: &str, body: Option<&Value>) -> Result<Value> {
+        loop {
+            let tokens = &self.auth["tokens"];
+            let mut req = self
+                .client
+                .request(method.clone(), url)
+                .bearer_auth(tokens["access_token"].as_str().unwrap_or(""))
+                .header("Accept", "application/json");
+            if let Some(id) = tokens["account_id"].as_str().filter(|id| !id.is_empty()) {
+                req = req.header("ChatGPT-Account-Id", id);
+            }
+            if let Some(body) = body {
+                req = req.json(body);
+            }
+            let resp = req.send().await.context("请求账号接口失败")?;
+            let status = resp.status();
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                if self.refresh_attempted {
+                    return Err(anyhow!("登录态已失效或无权访问，请重新登录该账号"));
+                }
+                self.refresh_attempted = true;
+                let auth = refresh_token(&self.client, &self.auth).await?;
+                self.refreshed_auth = Some(auth.clone());
+                self.auth = auth;
+                // POST 的请求体（含兑换请求 ID）保持不变。
+                continue;
+            }
+            if !status.is_success() {
+                // 不把服务端原始响应写入日志或前端，避免回显账号信息。
+                return Err(anyhow!("账号接口返回 {status}"));
+            }
+            return resp.json().await.context("账号接口返回的不是 JSON");
+        }
+    }
 }
 
 /// 用 refresh_token 换新的 access_token。
@@ -283,12 +263,10 @@ fn parse_quota(body: &Value) -> Quota {
             body.get("code_review_rate_limit")
                 .and_then(|r| r.get("primary_window")),
         ),
-        credits_balance: credits
-            .and_then(|c| c.get("balance"))
-            .map(|v| match v {
-                Value::String(s) => s.clone(),
-                other => other.to_string(),
-            }),
+        credits_balance: credits.and_then(|c| c.get("balance")).map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        }),
         has_credits: credits
             .and_then(|c| c.get("has_credits"))
             .and_then(|v| v.as_bool())
@@ -301,6 +279,8 @@ fn parse_quota(body: &Value) -> Quota {
             .and_then(|r| r.get("limit_reached"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        reset_credits: None,
+        reset_credits_error: None,
         fetched_at: now_secs(),
     }
 }

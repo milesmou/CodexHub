@@ -27,6 +27,9 @@ export const api = {
   /** 页面启动时同步已经由后台发起的额度查询 */
   refreshActiveIds: () => invoke<string[]>("refresh_active_ids"),
 
+  /** 重新查询并使用最先到期的可用重置卡；未确认的兑换会沿用原请求重试。 */
+  useResetCredit: (id: string) => invoke<string>("use_reset_credit", { id }),
+
   switchAccount: (id: string, restartCodex = true) =>
     invoke<SwitchOutcome>("switch_account", { id, restartCodex }),
 

@@ -304,6 +304,7 @@ pub fn build_account(payload: &NewAccountPayload, sort_index: i32, id: String) -
         warmup_schedule: Default::default(),
         last_scheduled_date: None,
         pending_scheduled_warmup: None,
+        pending_reset_redemption: None,
         id,
         name,
         email: codex::email_from_auth(&auth),

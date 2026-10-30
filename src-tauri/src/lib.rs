@@ -8,6 +8,7 @@ pub mod codexapp;
 pub mod crypto;
 pub mod model;
 pub mod quota;
+pub mod reset_credits;
 pub mod stats;
 pub mod store;
 pub mod warmup;
@@ -143,7 +144,6 @@ pub fn apply_settings(app: &AppHandle) {
         }
     }
 
-
     // 托盘图标始终可用；任务栏浮层是独立的常驻选项。
     if let Some(tray) = app.tray_by_id(tray::TRAY_ID) {
         let _ = tray.set_visible(true);
@@ -184,11 +184,15 @@ pub fn run() {
                 .build(),
         )
         .on_menu_event(tray::handle_menu_event)
+        // 配置中的 WebView 会早于 setup 创建，并可能立即调用账号 / 设置命令。
+        // 必须在 Builder 阶段加载并注册状态，避免首次请求得到 state not managed。
+        .manage(AppState::new(store::load()))
         .manage(scheduler::NotifyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::list_accounts,
             commands::refresh_quotas,
             commands::refresh_active_ids,
+            commands::use_reset_credit,
             commands::switch_account,
             commands::delete_account,
             commands::update_account,
@@ -216,7 +220,6 @@ pub fn run() {
             commands::codex_app_status,
         ])
         .setup(|app| {
-            app.manage(AppState::new(store::load()));
             let handle = app.handle().clone();
 
             // 用磁盘上的 auth.json 校准「当前账号」，比信任上次记录更靠谱
@@ -260,8 +263,7 @@ pub fn run() {
                     let keep_running = {
                         let state = app.state::<AppState>();
                         let vault = state.vault.lock().unwrap();
-                        vault.settings.minimize_to_tray
-                            || vault.settings.taskbar_status_enabled
+                        vault.settings.minimize_to_tray || vault.settings.taskbar_status_enabled
                     };
                     if keep_running {
                         api.prevent_close();

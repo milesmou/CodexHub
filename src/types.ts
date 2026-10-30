@@ -21,7 +21,18 @@ export interface Quota {
   has_credits: boolean;
   unlimited: boolean;
   limit_reached: boolean;
+  reset_credits?: ResetCredits | null;
+  reset_credits_error?: string | null;
   fetched_at: number;
+}
+
+export interface ResetCredits {
+  available_count: number;
+  credits: Array<{
+    id: string;
+    expires_at: number | null;
+    granted_at: number;
+  }>;
 }
 
 export interface AccountView {
@@ -36,6 +47,7 @@ export interface AccountView {
   hidden: boolean;
   source?: string | null;
   warmup_schedule: WarmupSchedule;
+  reset_pending: boolean;
 }
 
 export interface WarmupSchedule {

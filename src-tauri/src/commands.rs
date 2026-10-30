@@ -4,7 +4,7 @@
 //! 这样托盘菜单也能直接复用同一套逻辑，不用重复实现。
 
 use crate::model::*;
-use crate::{accounts, codex, codexapp, quota, stats, store, tray, warmup};
+use crate::{accounts, codex, codexapp, quota, reset_credits, stats, store, tray, warmup};
 use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -89,6 +89,7 @@ fn to_views(vault: &Vault) -> Vec<AccountView> {
                 hidden: a.hidden,
                 source: a.source.clone(),
                 warmup_schedule: a.warmup_schedule.clone(),
+                reset_pending: a.pending_reset_redemption.is_some(),
             }
         })
         .collect();
@@ -510,6 +511,148 @@ pub fn refresh_active_ids(state: State<'_, AppState>) -> Vec<String> {
         .keys()
         .cloned()
         .collect()
+}
+
+/// 兑换期间占用同一账号的额度请求槽，避免 token 轮换和旧额度写回竞态。
+struct ResetRequestGuard {
+    app: AppHandle,
+    id: String,
+}
+
+impl Drop for ResetRequestGuard {
+    fn drop(&mut self) {
+        self.app
+            .state::<AppState>()
+            .refresh_active
+            .lock()
+            .unwrap()
+            .remove(&self.id);
+        let _ = self.app.emit("refresh-finished", vec![self.id.clone()]);
+    }
+}
+
+fn save_reset_credentials(
+    app: &AppHandle,
+    id: &str,
+    client: &mut quota::AccountClient,
+) -> Result<(), String> {
+    if let Some(auth) = client.refreshed_auth.take() {
+        let state = app.state::<AppState>();
+        let mut vault = state.vault.lock().unwrap();
+        vault.find_mut(id).ok_or("账号不存在")?.auth = auth;
+        persist(app, &vault)?;
+    }
+    Ok(())
+}
+
+/// 使用最先到期的可用重置卡。未确认的请求持久化后沿用原请求 ID 重试。
+#[tauri::command]
+pub async fn use_reset_credit(app: AppHandle, id: String) -> Result<String, String> {
+    let state = app.state::<AppState>();
+    let _warmup_gate = state
+        .warmup_gate
+        .try_lock()
+        .map_err(|_| "正在激活额度窗口，请完成后再使用重置卡".to_string())?;
+    {
+        let mut active = state.refresh_active.lock().unwrap();
+        if active.contains_key(&id) {
+            return Err("该账号正在查询额度或使用重置卡，请稍后再试".into());
+        }
+        active.insert(id.clone(), 1);
+    }
+    let _request_guard = ResetRequestGuard {
+        app: app.clone(),
+        id: id.clone(),
+    };
+    let _ = app.emit("refresh-started", vec![id.clone()]);
+    sync_current_from_disk(&app);
+    let (auth, name, pending) = snapshot(&app, |vault| {
+        let account = vault.find(&id).ok_or("账号不存在")?;
+        if account.kind != AccountKind::Official {
+            return Err("只有官方账号支持使用重置卡");
+        }
+        Ok((
+            account.auth.clone(),
+            account.name.clone(),
+            account.pending_reset_redemption.clone(),
+        ))
+    })
+    .map_err(str::to_string)?;
+    let mut client = quota::AccountClient::new(&auth).map_err(|e| format!("{e}"))?;
+
+    let redemption = match pending {
+        Some(pending) => pending,
+        None => {
+            // 不依赖卡片上可能已经过期的缓存；点击时重新查询并排序。
+            let result = reset_credits::fetch(&mut client).await;
+            save_reset_credentials(&app, &id, &mut client)?;
+            let credits = result.map_err(|e| format!("查询重置卡失败：{e}"))?;
+            let pending = credits
+                .credits
+                .first()
+                .filter(|_| credits.available_count > 0)
+                .map(|credit| ResetRedemption {
+                    credit_id: credit.id.clone(),
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                });
+            {
+                let mut vault = state.vault.lock().unwrap();
+                let cached = vault.quota_cache.entry(id.clone()).or_default();
+                cached.reset_credits = Some(credits);
+                cached.reset_credits_error = None;
+                vault
+                    .find_mut(&id)
+                    .ok_or("账号不存在")?
+                    .pending_reset_redemption = pending.clone();
+                // 必须先落盘，再发送会消耗卡片的请求。
+                persist(&app, &vault)?;
+            }
+            pending.ok_or("没有当前套餐可用且未过期的重置卡")?
+        }
+    };
+
+    let result = reset_credits::consume(&mut client, &redemption).await;
+    save_reset_credentials(&app, &id, &mut client)?;
+    // 收到明确业务结果后才清除待确认记录；网络失败保留原卡和幂等请求 ID。
+    if result.is_ok() {
+        let mut vault = state.vault.lock().unwrap();
+        vault
+            .find_mut(&id)
+            .ok_or("账号不存在")?
+            .pending_reset_redemption = None;
+        persist(&app, &vault)?;
+    }
+
+    // 成功、已兑换、无卡或无需重置都以服务端最新额度为准。
+    let latest = quota::fetch_with_client(&mut client).await;
+    save_reset_credentials(&app, &id, &mut client)?;
+    let refresh_ok = latest.ok;
+    {
+        let mut vault = state.vault.lock().unwrap();
+        if let Some(account) = vault.find_mut(&id) {
+            if let Some(plan) = &latest.plan_type {
+                account.plan_type = Some(plan.clone());
+            }
+            vault.quota_cache.insert(id.clone(), latest);
+            persist(&app, &vault)?;
+        }
+    }
+    let message = match result {
+        Ok(reset_credits::ConsumeResult::Reset) => format!("已为「{name}」使用最先到期的重置卡"),
+        Ok(reset_credits::ConsumeResult::AlreadyRedeemed) => format!("「{name}」的该次重置已完成"),
+        Ok(reset_credits::ConsumeResult::NoCredit) => "没有可用的重置卡，已刷新卡片状态".into(),
+        Ok(reset_credits::ConsumeResult::NothingToReset) => "当前额度无需重置，未消耗重置卡".into(),
+        Err(error) => {
+            return Err(format!(
+                "重置结果未确认：{error}。请点击重试，将继续确认同一张卡"
+            ))
+        }
+    };
+    Ok(if refresh_ok {
+        message
+    } else {
+        format!("{message}；额度刷新失败，请稍后刷新")
+    })
 }
 
 /// 切换账号。
@@ -934,6 +1077,7 @@ pub fn update_account_credentials(
             acc.kind = accounts::classify(&acc.auth);
             // 凭证换了，之前的套餐 / 额度缓存作废
             acc.plan_type = None;
+            acc.pending_reset_redemption = None;
         }
 
         if acc.kind == AccountKind::Official {

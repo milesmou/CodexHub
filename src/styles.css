@@ -440,6 +440,31 @@ select:focus {
   flex: 1;
 }
 
+.reset-credit-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 10px;
+  padding: 7px 10px;
+  font-size: 11px;
+  text-align: left;
+}
+
+.reset-credit-action > span:first-child {
+  flex-shrink: 0;
+}
+
+.reset-credit-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
 /* 次要操作另起一行，平均分宽 */
 .card-actions {
   display: flex;

@@ -50,6 +50,8 @@ export default function App() {
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [warmingId, setWarmingId] = useState<string | null>(null);
   const [warmingAll, setWarmingAll] = useState(false);
+  const [resettingId, setResettingId] = useState<string | null>(null);
+  const resetInFlight = useRef(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [scheduleAccountId, setScheduleAccountId] = useState<string | null>(null);
@@ -244,6 +246,25 @@ export default function App() {
       setWarmingAll(false);
     }
   }, [reload, showToast, warmingAll, warmingId]);
+
+  const doUseResetCredit = useCallback(async (id: string) => {
+    if (resetInFlight.current) return;
+    resetInFlight.current = true;
+    setResettingId(id);
+    try {
+      showToast(await api.useResetCredit(id));
+    } catch (e) {
+      showToast(errorText(e));
+    } finally {
+      try {
+        await reload();
+      } catch (e) {
+        showToast(`账号状态刷新失败：${errorText(e)}`);
+      }
+      resetInFlight.current = false;
+      setResettingId(null);
+    }
+  }, [reload, showToast]);
 
   const doRename = useCallback(
     async (id: string, name: string) => {
@@ -472,10 +493,12 @@ export default function App() {
                 account={a}
                 isBest={a.id === bestId}
                 busy={switchingId === a.id}
-                requesting={refreshingIds.has(a.id) || warmingId === a.id}
+                requesting={refreshingIds.has(a.id) || warmingId === a.id || resettingId === a.id}
                 warming={warmingId === a.id}
+                resetting={resettingId === a.id}
+                resetLocked={resettingId !== null || warmingAll || warmingId !== null || switchingId !== null}
                 warmupLocked={
-                  refreshingIds.size > 0 || warmingAll || warmingId !== null
+                  refreshingIds.size > 0 || warmingAll || warmingId !== null || resettingId !== null
                 }
                 dragging={draggingId === a.id}
                 dragTarget={dragTargetId === a.id && draggingId !== a.id}
@@ -490,6 +513,7 @@ export default function App() {
                 onRename={doRename}
                 onEdit={doEdit}
                 onWarmup={doWarmup}
+                onUseResetCredit={doUseResetCredit}
                 onSchedule={setScheduleAccountId}
                 onToggleHidden={doToggleHidden}
                 onDelete={doDelete}
